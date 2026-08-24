@@ -1,0 +1,45 @@
+name: Android APK (release)
+
+# Build a standalone installable release APK for the Time Audit app on a free GitHub
+# runner (Android SDK pre-installed) — off the VPS, no Expo account. Release embeds
+# the JS bundle so it runs without a Metro dev server; Expo's release signingConfig
+# defaults to the debug keystore, so the APK stays sideloadable. The app IS the repo
+# root here (no app/ subdir).
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master, main]
+    paths-ignore:
+      - ".maestro/**"
+      - ".github/workflows/android-e2e.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install JS deps
+        run: npm ci
+      - name: Expo prebuild (Android)
+        run: npx expo prebuild -p android --no-install
+      - name: Gradle assembleRelease
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: time-audit-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
