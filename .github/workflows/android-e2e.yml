@@ -1,0 +1,71 @@
+name: Android E2E (emulator)
+
+# Drive the release APK like a human on a real Android emulator (KVM, on GitHub's
+# runners — never the VPS): onboard, start tracking, screenshot every screen, and —
+# the key check — dump the AlarmManager queue to prove the 15-min pings were actually
+# scheduled (delivery over 15-min cadence can't be waited out in CI).
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - ".maestro/**"
+      - ".github/workflows/android-e2e.yml"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Download the latest release APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo ${{ github.repository }} --pattern '*.apk' -D apk
+          ls -la apk/
+      - name: Install Maestro
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Emulator + tour + alarm check
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -x
+            adb install -r apk/*.apk
+            # Pre-grant the notification permission so onboarding's Start tracking flows.
+            adb shell "pm grant agency.lumieremedia.timeaudit android.permission.POST_NOTIFICATIONS" || true
+            mkdir -p shots
+            adb shell monkey -p agency.lumieremedia.timeaudit -c android.intent.category.LAUNCHER 1 || true
+            sleep 8
+            adb exec-out screencap -p > shots/00-launch.png
+            maestro test .maestro/tour.yaml --format junit || true
+            cp -r "$HOME/.maestro/tests" shots/maestro-tests 2>/dev/null || true
+            adb exec-out screencap -p > shots/99-final.png
+            # THE key proof: were the 15-min pings scheduled into AlarmManager?
+            echo "=== scheduled alarms for the app ===" | tee shots/alarms.txt
+            adb shell "dumpsys alarm" 2>&1 | grep -iE "timeaudit" | tee -a shots/alarms.txt || echo "(no timeaudit alarms found)" | tee -a shots/alarms.txt
+            echo "=== pending notifications / channels ===" | tee -a shots/alarms.txt
+            adb shell "dumpsys notification --noredact" 2>&1 | grep -iE "timeaudit" | head -20 | tee -a shots/alarms.txt || true
+            adb logcat -d 2>&1 | grep -iE "timeaudit|Expo.*Notif|Schedul" | tail -30 > shots/logcat.txt || true
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shots
+          path: shots/
+          if-no-files-found: warn

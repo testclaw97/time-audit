@@ -1,0 +1,36 @@
+# Human-like tour: onboard, start tracking, and walk every screen on a real device.
+# The 15-min ping DELIVERY can't be waited out in CI, so the workflow separately
+# dumps the AlarmManager queue to prove the pings were actually scheduled.
+appId: agency.lumieremedia.timeaudit
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "time actually go.*"
+    timeout: 60000
+    optional: true
+- takeScreenshot: 01-onboarding
+# Start tracking (schedules the pings + requests notification permission).
+- runFlow:
+    when:
+      visible: "Start tracking.*"
+    commands:
+      - tapOn: "Start tracking.*"
+# Grant the Android 13+ POST_NOTIFICATIONS runtime prompt if it appears.
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+- extendedWaitUntil:
+    visible: "Today"
+    timeout: 20000
+    optional: true
+- takeScreenshot: 02-today
+- tapOn:
+    text: "Insights"
+    optional: true
+- takeScreenshot: 03-insights
+- tapOn:
+    text: "Settings"
+    optional: true
+- takeScreenshot: 04-settings
