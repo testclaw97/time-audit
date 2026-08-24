@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -100,11 +101,13 @@ class PingActivity : Activity() {
         root.orientation = LinearLayout.VERTICAL
         root.setBackgroundColor(BG)
         root.setPadding(dp(20), dp(48), dp(20), dp(28))
+        // A ScrollView is a FrameLayout, so its child's params must be FrameLayout.LayoutParams
+        // (Kotlin can't resolve the inherited `ScrollView.LayoutParams` via the subclass name).
         scroll.addView(
             root,
-            ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.MATCH_PARENT
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
 
