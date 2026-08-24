@@ -1,25 +1,50 @@
 {
   "expo": {
-    "name": "time-audit",
+    "name": "Time Audit",
     "slug": "time-audit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "scheme": "timeaudit",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0c0c0f",
+    "splash": {
+      "backgroundColor": "#0c0c0f",
+      "resizeMode": "contain",
+      "image": "./assets/splash-icon.png"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "agency.lumieremedia.timeaudit"
     },
     "android": {
+      "package": "agency.lumieremedia.timeaudit",
+      "userInterfaceStyle": "dark",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0c0c0f",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#f5a623"
+        }
+      ],
+      "@react-native-community/datetimepicker"
+    ]
   }
 }
