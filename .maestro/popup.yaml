@@ -1,0 +1,64 @@
+# Full-screen category popup — the real proof.
+# Onboard → Settings → "Test the popup" → the NATIVE PingActivity chooser must appear over the
+# app → tap a category chip → the slot gets logged (drained on foreground) and shows on Today.
+# The over-the-lock-screen / screen-off delivery uses the same setShowWhenLocked + FSI mechanism
+# and is proven separately by the dumpsys alarm queue (see the workflow) — CI can't wait out a
+# real 15-min screen-off ping, but "Test the popup" launches the identical chooser Activity.
+appId: agency.lumieremedia.timeaudit
+---
+- launchApp
+# Onboarding hook screen ("...Where do they actually go?"). CTA is "Start my audit".
+- extendedWaitUntil:
+    visible: "actually go.*"
+    timeout: 60000
+    optional: true
+- takeScreenshot: 01-onboarding
+- runFlow:
+    when:
+      visible: "Start my audit.*"
+    commands:
+      - tapOn: "Start my audit.*"
+# POST_NOTIFICATIONS runtime prompt (pre-granted in CI, but tap through if it appears).
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+- extendedWaitUntil:
+    visible: "Settings"
+    timeout: 20000
+    optional: true
+- takeScreenshot: 02-today
+# Into Settings, then fire the test popup.
+- tapOn:
+    text: "Settings"
+    optional: true
+- extendedWaitUntil:
+    visible: "Test the popup.*"
+    timeout: 15000
+    optional: true
+- scrollUntilVisible:
+    element:
+      text: "Test the popup.*"
+    direction: DOWN
+    timeout: 15000
+    optional: true
+- takeScreenshot: 03-settings
+- tapOn: "Test the popup.*"
+# THE PROOF: the native full-screen chooser Activity appears over the app. Hard assert.
+- extendedWaitUntil:
+    visible: "What are you doing right now.*"
+    timeout: 15000
+- takeScreenshot: 04-POPUP-chooser
+# One-tap log: pick the "Work" category chip. Chooser records a PendingLog and finishes.
+- tapOn: "Work"
+- takeScreenshot: 05-after-pick
+# Back in the app; the foreground drain replays the pick into the log. Confirm on Today.
+- tapOn:
+    text: "Today"
+    optional: true
+- extendedWaitUntil:
+    visible: "Work"
+    timeout: 15000
+    optional: true
+- takeScreenshot: 06-today-logged

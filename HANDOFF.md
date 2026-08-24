@@ -2,8 +2,8 @@
 
 ## Quick State
 
-**Last session:** 2026-08-24 (built from scratch).
-**Status:** Android app **v0.1.0 — built, published, verified on a real emulator.** Standalone Expo (RN+TS), local-only (no backend/login). Alex Hormozi's 15-minute rule: every 15 min in the awake window the phone pings "What did you just do?", user logs 1–2 words (direct-reply from the notification), Insights show where time went.
+**Last session:** 2026-08-24.
+**Status:** Time Audit gained editable categories + a configurable ping interval (5/10/15/20/30/45/60 min, 15 = Hormozi default) + a NATIVE Android full-screen category chooser popup (fires over the lock screen via `modules/time-ping/` — AlarmManager → fullScreenIntent → PingActivity) that replaces the old text-only expo-notification ping on Android; expo-notifications is now the web/iOS fallback only. JS is wired native-first in `App.tsx armPings` (sync categories → drain pending logs → schedule/cancel), `tsc` clean — the full-screen popup over the lock screen is still PENDING on-device/emulator verification.
 
 - **Screens (all render on-device):** Onboarding (window picker + "Start tracking"), Today (15-min timeline + NOW block + unlogged gaps), Insights (ranked breakdown by activity), Settings. Amber `#f5a623` accent (NOT Mr. Productive's violet). See `CLAUDE.md` for structure + landmines.
 - **Core VERIFIED on-device:** "Start tracking" schedules `RTC_WAKEUP` alarms into AlarmManager **exactly 900,000ms (15 min) apart** (proven via `dumpsys alarm`). AlarmManager-backed → fire when app is killed. Direct-reply category `time_audit_log` (textInput) logs without opening the app; same `store.logEntry` path as the in-app QuickEntry (storage half proven on web).

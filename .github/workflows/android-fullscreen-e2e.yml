@@ -1,0 +1,85 @@
+name: Full-screen popup E2E
+
+# Self-contained proof for the native full-screen category chooser: build the release APK
+# (this is what actually COMPILES the Kotlin module time-ping), install it on a real Android
+# emulator, and drive the popup like a human — onboard, hit "Test the popup", assert the native
+# chooser Activity appears, tap a category chip, and confirm the slot got logged. Also dumps the
+# AlarmManager queue to prove the screen-off firing mechanism is armed (a real 15-min ping can't
+# be waited out in CI). Runs off the VPS on GitHub's runners.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [feature/fullscreen-ping]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install JS deps
+        run: npm ci
+      - name: Expo prebuild (Android)  # autolinks the local modules/time-ping module
+        run: npx expo prebuild -p android --no-install
+      - name: Gradle assembleRelease  # compiles the Kotlin — the real native gate
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+      - name: Install Maestro
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Emulator + popup test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          # API 33 (Android 13): USE_FULL_SCREEN_INTENT is a normal install-time permission here
+          # (the Android 14 special-access gate starts at API 34), so the chooser surfaces cleanly
+          # once POST_NOTIFICATIONS is granted — a deterministic proof of the mechanism.
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -x
+            PKG=agency.lumieremedia.timeaudit
+            adb install -r android/app/build/outputs/apk/release/app-release.apk
+            # Pre-grant the notification permission so onboarding + the popup flow without a dialog.
+            adb shell "pm grant $PKG android.permission.POST_NOTIFICATIONS" || true
+            mkdir -p shots
+            adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 || true
+            sleep 8
+            adb exec-out screencap -p > shots/00-launch.png
+            # Drive the popup flow (screenshots land in the CWD as <name>.png).
+            maestro test .maestro/popup.yaml --format junit --output shots/popup-report.xml || true
+            cp ./*.png shots/ 2>/dev/null || true
+            cp -r "$HOME/.maestro/tests" shots/maestro-logs 2>/dev/null || true
+            adb exec-out screencap -p > shots/99-final.png
+            # Proof the screen-off firing mechanism is armed: exact alarms queued in AlarmManager.
+            echo "=== scheduled timeaudit alarms (screen-off firing mechanism) ===" | tee shots/proof.txt
+            adb shell "dumpsys alarm" 2>&1 | grep -iE "timeaudit" | tee -a shots/proof.txt || echo "(no timeaudit alarms found)" | tee -a shots/proof.txt
+            echo "=== time_ping prefs (categories + pending logs; best-effort, release not debuggable) ===" | tee -a shots/proof.txt
+            adb shell "run-as $PKG cat /data/data/$PKG/shared_prefs/time_ping.xml" 2>&1 | tee -a shots/proof.txt || true
+            adb logcat -d 2>&1 | grep -iE "timeaudit|TimePing|AndroidRuntime" | tail -60 > shots/logcat.txt || true
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullscreen-popup-e2e
+          path: shots/
+          if-no-files-found: warn

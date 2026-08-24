@@ -12,34 +12,57 @@ local-only — no backend, no login, no network.**
 
 ## Structure
 ```
-App.tsx                     nav + bootstrap + notification response wiring
+App.tsx                     nav + bootstrap + native-first ping arming + notification response wiring
+modules/time-ping/          NATIVE Android module (Kotlin): full-screen category chooser + AlarmManager
 src/theme.ts                design tokens (colors/space/radius/shadow/type)
-src/lib/time.ts             pure 15-min slot math (no deps, testable)
-src/lib/store.ts            AsyncStorage persistence + reactive useStore() (useSyncExternalStore)
-src/lib/notifications.ts    schedule/cancel pings, direct-reply category, response parsing
+src/lib/time.ts             pure slot math — slot size RUNTIME-CONFIGURABLE via configureSlotMinutes()
+src/lib/store.ts            AsyncStorage persistence + reactive useStore(); categories + native bridge
+src/lib/notifications.ts    expo-notifications fallback (web/iOS ONLY): schedule/cancel, direct-reply, parse
 src/lib/insights.ts         aggregate slots -> ranked breakdown + unlogged bucket
 src/screens/                Onboarding, Today, Insights, Settings
 src/ui/                     Card, Button, PressableScale, FadeIn, QuickEntry, TimeField
 ```
 
 ## How the core works
-- **Slot model:** a slot = 15 min identified by its START epoch (aligned to :00/:15/:30/:45).
-  A ping fires at a slot's END and asks about the slot that just ended (fire 10:15 → logs
-  slot 10:00). Entries stored as `{ [slotStartEpoch]: {text, ts} }`.
-- **Scheduling (reliability):** NO JS timer. We hand the OS a batch of DATE-triggered
-  notifications (AlarmManager-backed on Android → fire when app is killed). We schedule the
-  next ~24h of in-window boundaries (capped 60, iOS pending limit is 64) and RE-SCHEDULE on
-  every app foreground (`AppState` active) and on cold start.
-- **Direct reply:** notification category `time_audit_log` has a `textInput` action, so the
-  user types 1–2 words on the notification and submits WITHOUT opening the app.
-  `addNotificationResponseReceivedListener` → `parseResponse` → `logEntry(text, slotStart)`.
-  A plain tap opens Today focused on that slot.
+- **Slot model:** a slot = one interval identified by its START epoch (default 15 min, aligned
+  to :00/:15/:30/:45; the interval is user-configurable — 5/10/15/20/30/45/60 min — via
+  `configureSlotMinutes()` in `time.ts`, driven off `settings.intervalMinutes`). A ping fires at
+  a slot's END and asks about the slot that just ended (at 15 min, fire 10:15 → logs slot 10:00).
+  Entries stored as `{ [slotStartEpoch]: {text, ts, category?} }` — `category` is a Category.id.
+- **Native ping (Android — the real path):** `modules/time-ping/` (Kotlin, `Name("TimePing")`)
+  owns scheduling + the popup. `AlarmManager.setExactAndAllowWhileIdle` → `PingReceiver` →
+  high-importance notification with `setFullScreenIntent` → `PingActivity`
+  (`setShowWhenLocked`/`setTurnScreenOn` + dismiss keyguard) renders a grid of category chips
+  IN KOTLIN over the lock screen. Tapping a chip appends a PendingLog to SharedPreferences and
+  finishes; `PingReceiver` chains the next alarm; `BootReceiver` re-arms after reboot. JS owns
+  categories + interval, pushes them via `TimePing.setCategories()`, calls `TimePing.schedule()`,
+  and DRAINS pending logs (`drainPendingLogs()` → `TimePing.getPendingLogs()`/`clearPendingLogs()`)
+  into the entry store on every foreground. The `__other__` chip + "Skip" open the app / record
+  nothing. Editable categories seed the SAME ids in Kotlin (`DEFAULT_CATEGORIES`) and JS.
+- **Arming (App.tsx `armPings`):** ONE branch picks native vs expo by `isAvailable()` and runs
+  exactly one — called on cold start, on `AppState` "active", and on any change to
+  `intervalMinutes`/`wakeMinutes`/`sleepMinutes`/`tracking`. Native: sync categories → drain →
+  schedule (tracking on) / cancelAll (off). Idempotent (schedule cancels+reschedules).
+- **Expo-notifications fallback (web/iOS ONLY):** NO JS timer. A batch of DATE-triggered
+  notifications (AlarmManager-backed → fire when app killed), next ~24h of in-window boundaries
+  (capped 60, iOS pending limit 64), re-scheduled on foreground + cold start. Direct-reply
+  category `time_audit_log` (`textInput`) → `parseResponse` → `logEntry(text, slotStart)`; a
+  plain tap opens Today on the slot. This path NEVER runs on an Android build (native owns it).
 
 ## Verify
 - `npx tsc --noEmit` (clean) · `npx expo export --platform web` (succeeds).
 - Web preview: `npx expo export --platform web && npx serve -s dist -l 4173`.
 
 ## ⚠️ Landmines
+- **On Android the NATIVE module owns pings (full-screen chooser); expo-notifications pings are
+  the web/iOS fallback ONLY — never both (double popups).** `App.tsx armPings` branches on
+  `isAvailable()` and runs exactly one path. If you ever call `reschedulePings` unguarded on
+  Android you get two pings per slot (native chooser + expo banner).
+- **Full-screen-intent + exact-alarm + battery-exemption are special-access perms; the chooser
+  may not appear over the lock screen until granted.** `USE_FULL_SCREEN_INTENT` (Android 14+) and
+  `SCHEDULE_EXACT_ALARM` (Android 12+) are settings bounces, not runtime dialogs; battery
+  optimization can delay/kill the alarm. If the popup doesn't show, use Settings → "Test the
+  popup" (`TimePing.triggerTestPing()`) and grant via the Permissions rows — don't assume broken.
 - **Notifications are a no-op on web by design.** Every entry point in
   `src/lib/notifications.ts` guards on `Platform.OS === "web"`; the web export is only for
   visual/logic verification. The 15-min pings + direct-reply can ONLY be verified on a real

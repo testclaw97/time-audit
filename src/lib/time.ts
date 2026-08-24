@@ -1,18 +1,65 @@
-// Pure time math for the 15-minute grid. No React, no platform deps — trivially testable
-// and shared by the store, the notification scheduler and every screen.
+// Pure time math for the slot grid (15 minutes by default, now RUNTIME-CONFIGURABLE). No
+// React, no platform deps — trivially testable and shared by the store, the notification
+// scheduler and every screen.
 //
-// A "slot" is a 15-minute block identified by its START time (epoch ms, aligned to a
-// :00/:15/:30/:45 boundary in local time). A ping fires at the END boundary of a slot and
-// asks "what did you just do?" — so a ping firing at 10:15 logs the slot that started at
-// 10:00.
+// A "slot" is a block of `SLOT_MINUTES` minutes identified by its START time (epoch ms,
+// aligned to a boundary in local time — :00/:15/:30/:45 at the 15-min default). A ping fires
+// at the END boundary of a slot and asks "what did you just do?" — so at the 15-min default,
+// a ping firing at 10:15 logs the slot that started at 10:00.
+//
+// SLOT SIZE IS CONFIGURABLE. The user can change the ping interval (5/10/15/20/30/45/60 min)
+// in Settings. `configureSlotMinutes(n)` swaps the live slot size; every function below reads
+// the CURRENT value via `getSlotMs()` so all downstream math (slot alignment, today's slots,
+// weekly aggregation, upcoming pings) follows the chosen interval. Keep this the ONLY mutable
+// module state — every function stays otherwise pure (same inputs + same slot config => same
+// output).
 
+// --- live, runtime-configurable slot size ---------------------------------------------
+let SLOT_MINUTES = 15; // the currently-configured interval in minutes
+let SLOT_MS_CURRENT = SLOT_MINUTES * 60 * 1000; // derived, kept in lock-step
+
+/** Set the live slot size (ping interval) in minutes. Called by the store on hydrate and
+ *  whenever the user changes `settings.intervalMinutes`. Ignores non-finite / non-positive
+ *  input (falls back to the 15-min default) so a corrupt setting can never zero the grid. */
+export function configureSlotMinutes(min: number): void {
+  const safe = Number.isFinite(min) && min > 0 ? Math.floor(min) : 15;
+  SLOT_MINUTES = safe;
+  SLOT_MS_CURRENT = safe * 60 * 1000;
+}
+
+/** The CURRENT slot length in ms — the live value all slot math reads. Use this, not the
+ *  `SLOT_MS` const below, anywhere the configured interval matters. */
+export function getSlotMs(): number {
+  return SLOT_MS_CURRENT;
+}
+
+/** The CURRENT slot length in minutes. */
+export function getSlotMinutes(): number {
+  return SLOT_MINUTES;
+}
+
+// NOTE: `SLOT_MS` is the DEFAULT (15-min) slot length, kept as a stable export purely for
+// backward compatibility with callers that were written against the fixed grid (e.g.
+// `notifications.ts` computes `fireDate.getTime() - SLOT_MS`). It does NOT track
+// `configureSlotMinutes` — LIVE slot math uses `getSlotMs()`. Do not use `SLOT_MS` for new
+// code that should honour the user's chosen interval.
 export const SLOT_MS = 15 * 60 * 1000;
+// Slots per hour at the DEFAULT grid. Retained only as a coarse loop-guard reference; the
+// actual per-day bound is derived from the live `SLOT_MINUTES` via `slotsPerDayGuard()`.
 export const SLOTS_PER_HOUR = 4;
 
-/** Floor a Date/epoch to the start of its 15-minute slot (local-aligned). */
+/** A generous upper bound on how many slots could fall in a day at the current interval —
+ *  used only to cap the while/for loops below so a bad window can never spin forever. Uses a
+ *  floor of 5 min on the interval so the bound stays finite even if something odd is set. */
+function slotsPerDayGuard(): number {
+  return Math.ceil(1440 / Math.max(5, SLOT_MINUTES)) + 8;
+}
+
+/** Floor a Date/epoch to the start of its slot (local-aligned) at the CURRENT interval. */
 export function slotStartFor(input: Date | number): number {
   const t = typeof input === "number" ? input : input.getTime();
-  return Math.floor(t / SLOT_MS) * SLOT_MS;
+  const ms = getSlotMs();
+  return Math.floor(t / ms) * ms;
 }
 
 /** Minutes since local midnight for a given instant. */
@@ -80,16 +127,18 @@ export function todaySlots(wake: number, sleep: number, now: Date = new Date()):
   startOfDay.setHours(0, 0, 0, 0);
   const nowSlot = slotStartFor(now);
   const out: number[] = [];
+  const step = getSlotMs();
   // Walk from wake boundary today to the current slot.
   let firstMod = wake;
   const first = new Date(startOfDay.getTime() + firstMod * 60 * 1000);
   let t = slotStartFor(first);
-  // guard against pathological loops (max a full day of slots)
+  // guard against pathological loops (max a full day of slots at the current interval)
   let guard = 0;
-  while (t <= nowSlot && guard < 24 * SLOTS_PER_HOUR + 4) {
+  const maxGuard = slotsPerDayGuard();
+  while (t <= nowSlot && guard < maxGuard) {
     const mod = minuteOfDay(t);
     if (slotInWindow(mod, wake, sleep)) out.push(t);
-    t += SLOT_MS;
+    t += step;
     guard++;
   }
   return out;
@@ -101,8 +150,10 @@ export function slotsForDay(day: Date, wake: number, sleep: number): number[] {
   const startOfDay = new Date(day);
   startOfDay.setHours(0, 0, 0, 0);
   const out: number[] = [];
-  for (let i = 0; i < 24 * SLOTS_PER_HOUR; i++) {
-    const t = startOfDay.getTime() + i * SLOT_MS;
+  const step = getSlotMs();
+  const slotsInDay = Math.ceil(1440 / Math.max(1, SLOT_MINUTES));
+  for (let i = 0; i < slotsInDay; i++) {
+    const t = startOfDay.getTime() + i * step;
     if (slotInWindow(minuteOfDay(t), wake, sleep)) out.push(t);
   }
   return out;
@@ -118,15 +169,18 @@ export function upcomingPings(
   max = 60,
 ): Date[] {
   const out: Date[] = [];
+  const step = getSlotMs();
   // next boundary strictly after `from`
-  let t = slotStartFor(from) + SLOT_MS;
+  let t = slotStartFor(from) + step;
   const end = from.getTime() + hours * 60 * 60 * 1000;
   let guard = 0;
-  while (t <= end && out.length < max && guard < hours * SLOTS_PER_HOUR + 8) {
+  // per-hour slot count at the current interval, plus headroom
+  const maxGuard = Math.ceil(hours * (60 / Math.max(5, SLOT_MINUTES))) + 8;
+  while (t <= end && out.length < max && guard < maxGuard) {
     if (t > from.getTime() && inPingWindow(minuteOfDay(t), wake, sleep)) {
       out.push(new Date(t));
     }
-    t += SLOT_MS;
+    t += step;
     guard++;
   }
   return out;

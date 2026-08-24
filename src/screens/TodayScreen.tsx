@@ -10,18 +10,30 @@ import Card from "../ui/Card";
 import FadeIn from "../ui/FadeIn";
 import QuickEntry from "../ui/QuickEntry";
 import PressableScale from "../ui/PressableScale";
+import type { Category } from "../lib/store";
 import { logEntry, useStore } from "../lib/store";
 import {
-  SLOT_MS,
   formatClock,
   formatDuration,
+  getSlotMinutes,
+  getSlotMs,
   normalizeLabel,
   slotStartFor,
   todaySlots,
 } from "../lib/time";
 
 type Block =
-  | { kind: "entry"; label: string; start: number; end: number; count: number; hasNow: boolean }
+  | {
+      kind: "entry";
+      label: string;
+      start: number;
+      end: number;
+      count: number;
+      hasNow: boolean;
+      category?: string;
+      emoji?: string;
+      color?: string;
+    }
   | { kind: "gap"; start: number; end: number; count: number; hasNow: boolean };
 
 export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }) {
@@ -41,10 +53,20 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
     if (typeof focusSlot === "number") setEditing(slotStartFor(focusSlot));
   }, [focusSlot]);
 
+  // Per-slot geometry follows the user's chosen interval (5/10/15/…/60 min), not a fixed 15.
+  const slotMs = getSlotMs();
+  const slotMin = getSlotMinutes();
+
   const currentSlot = slotStartFor(now.getTime());
   const slots = useMemo(
     () => todaySlots(settings.wakeMinutes, settings.sleepMinutes, now),
     [settings.wakeMinutes, settings.sleepMinutes, now],
+  );
+
+  // Resolve a Category.id -> its full record (color/emoji/label) for dots + chip tinting.
+  const catById = useMemo(
+    () => new Map(settings.categories.map((c) => [c.id, c] as const)),
+    [settings.categories],
   );
 
   const loggedCount = useMemo(
@@ -53,12 +75,15 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
   );
   const unloggedCount = slots.length - loggedCount;
 
-  // Build merged blocks in chronological order, then reverse (newest first).
+  // Build merged blocks in chronological order, then reverse (newest first). Consecutive
+  // entries merge only when BOTH the label and the category id match.
   const blocks = useMemo<Block[]>(() => {
     const out: Block[] = [];
     for (const s of slots) {
       const e = entries[String(s)];
       const label = e?.text?.trim() ? e.text.trim() : null;
+      const catId = e?.category;
+      const cat = catId ? catById.get(catId) : undefined;
       const isNow = s === currentSlot;
       const last = out[out.length - 1];
       if (label) {
@@ -66,33 +91,62 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
           last &&
           last.kind === "entry" &&
           normalizeLabel(last.label) === normalizeLabel(label) &&
+          last.category === catId &&
           last.end === s
         ) {
-          last.end = s + SLOT_MS;
+          last.end = s + slotMs;
           last.count++;
           last.hasNow = last.hasNow || isNow;
         } else {
-          out.push({ kind: "entry", label, start: s, end: s + SLOT_MS, count: 1, hasNow: isNow });
+          out.push({
+            kind: "entry",
+            label,
+            start: s,
+            end: s + slotMs,
+            count: 1,
+            hasNow: isNow,
+            category: catId,
+            emoji: cat?.emoji,
+            color: cat?.color,
+          });
         }
       } else {
         if (last && last.kind === "gap" && last.end === s) {
-          last.end = s + SLOT_MS;
+          last.end = s + slotMs;
           last.count++;
           last.hasNow = last.hasNow || isNow;
         } else {
-          out.push({ kind: "gap", start: s, end: s + SLOT_MS, count: 1, hasNow: isNow });
+          out.push({ kind: "gap", start: s, end: s + slotMs, count: 1, hasNow: isNow });
         }
       }
     }
     return out.reverse();
-  }, [slots, entries, currentSlot]);
+  }, [slots, entries, currentSlot, catById, slotMs]);
 
   const editingSlot = editing ?? currentSlot;
   const editingIsCurrent = editingSlot === currentSlot;
 
+  const rawEditing = entries[String(editingSlot)];
+  const currentEntry =
+    rawEditing?.text?.trim()
+      ? {
+          label: rawEditing.text.trim(),
+          category: rawEditing.category ? catById.get(rawEditing.category) : undefined,
+        }
+      : null;
+
   const submit = (text: string) => {
     logEntry(text, editingSlot);
     setEditing(null);
+  };
+
+  const pickCategory = (cat: Category) => {
+    logEntry(cat.label, editingSlot, cat.id);
+    setEditing(null);
+  };
+
+  const clearSlot = () => {
+    logEntry("", editingSlot);
   };
 
   const dateLabel = now.toLocaleDateString(undefined, {
@@ -120,7 +174,7 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
           <Stat value={String(unloggedCount)} label="unlogged" tone="gap" />
           <View style={styles.statDivider} />
           <Stat
-            value={formatDuration(loggedCount * 15)}
+            value={formatDuration(loggedCount * slotMin)}
             label="accounted"
             tone="accent"
           />
@@ -132,7 +186,7 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
           <Text style={[type.caption, styles.entryHeaderText]}>
             {editingIsCurrent
               ? "What are you doing right now?"
-              : `Editing ${formatClock(editingSlot)}–${formatClock(editingSlot + SLOT_MS)}`}
+              : `Editing ${formatClock(editingSlot)}–${formatClock(editingSlot + slotMs)}`}
           </Text>
           {!editingIsCurrent ? (
             <PressableScale onPress={() => setEditing(null)} accessibilityLabel="Cancel edit">
@@ -145,6 +199,10 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
           placeholder={
             editingIsCurrent ? "e.g. deep work, email, lunch…" : "Log this slot…"
           }
+          categories={settings.categories}
+          onPickCategory={pickCategory}
+          current={currentEntry}
+          onClear={clearSlot}
           onSubmit={submit}
         />
       </FadeIn>
@@ -163,6 +221,7 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
             <SlotBlock
               key={`${b.kind}-${b.start}`}
               block={b}
+              slotMin={slotMin}
               onEdit={(slot) => setEditing(slotStartFor(slot))}
               selected={editingSlot >= b.start && editingSlot < b.end && !editingIsCurrent}
             />
@@ -194,15 +253,24 @@ function Stat({
 
 function SlotBlock({
   block,
+  slotMin,
   onEdit,
   selected,
 }: {
   block: Block;
+  slotMin: number;
   onEdit: (slot: number) => void;
   selected: boolean;
 }) {
   const range = `${formatClock(block.start)}–${formatClock(block.end)}`;
-  const spanLabel = block.count > 1 ? `${block.count} × 15m · ${formatDuration(block.count * 15)}` : range;
+  const spanLabel =
+    block.count > 1
+      ? `${block.count} × ${slotMin}m · ${formatDuration(block.count * slotMin)}`
+      : range;
+
+  // A per-category color on the rail dot when the entry carries one; teal for a custom
+  // (uncategorized) entry; the dim gap tone for an unlogged block.
+  const catColor = block.kind === "entry" ? block.color : undefined;
 
   return (
     <PressableScale
@@ -215,8 +283,9 @@ function SlotBlock({
         <View
           style={[
             styles.dot,
-            block.hasNow && styles.dotNow,
             block.kind === "entry" && !block.hasNow && styles.dotEntry,
+            block.hasNow && styles.dotNow,
+            catColor && !block.hasNow ? { backgroundColor: catColor } : null,
           ]}
         />
         <View style={styles.rail} />
@@ -244,9 +313,12 @@ function SlotBlock({
         </View>
 
         {block.kind === "entry" ? (
-          <Text style={[type.subheading, styles.entryText]} numberOfLines={2}>
-            {block.label}
-          </Text>
+          <View style={styles.entryLine}>
+            {block.emoji ? <Text style={styles.entryEmoji}>{block.emoji}</Text> : null}
+            <Text style={[type.subheading, styles.entryText]} numberOfLines={2}>
+              {block.label}
+            </Text>
+          </View>
         ) : (
           <Text style={[type.body, styles.gapText]}>
             {block.hasNow ? "Right now — tap to log" : "Unlogged"}
@@ -324,7 +396,9 @@ const styles = StyleSheet.create({
   },
   timeText: { color: colors.fg2, fontVariant: ["tabular-nums"] },
   timeGap: { color: colors.gapText },
-  entryText: { color: colors.fg },
+  entryLine: { flexDirection: "row", alignItems: "center", gap: space.s1 },
+  entryEmoji: { fontSize: 17 },
+  entryText: { color: colors.fg, flex: 1 },
   gapText: { color: colors.gapText, fontStyle: "italic" },
   spanText: { ...type.caption, color: colors.muted },
   spanSub: { ...type.caption, color: colors.muted, marginTop: 4 },

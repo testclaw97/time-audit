@@ -20,6 +20,9 @@ import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
 import type { Settings } from "./store";
 import { SLOT_MS, upcomingPings } from "./time";
+// The native full-screen chooser (Android). When it's present it is the SOLE ping source, so
+// this expo-notifications path must never ALSO schedule — see the guard in reschedulePings.
+import { isAvailable } from "../../modules/time-ping";
 
 export const CATEGORY_ID = "time_audit_log";
 export const ACTION_LOG = "LOG_TEXT";
@@ -103,7 +106,14 @@ export async function cancelAllPings(): Promise<void> {
  *  whenever the awake window / tracking state changes. Returns how many were scheduled. */
 export async function reschedulePings(settings: Settings): Promise<number> {
   if (isWeb) return 0;
+  // Always clear any expo-scheduled pings first. This also neutralises pings left over from a
+  // pre-native build after an upgrade, so they can't double up with the native chooser.
   await cancelAllPings();
+  // On Android the NATIVE module owns pings (the full-screen chooser). Never ALSO schedule expo
+  // notifications there or every slot fires twice. cancelAllPings above already cleared any
+  // legacy/stray expo pings; we just don't schedule new ones. (App.tsx armPings enforces the
+  // same branch; this source-level guard covers direct callers — onboarding, settings.)
+  if (isAvailable()) return 0;
   if (!settings.tracking) return 0;
 
   const pings = upcomingPings(settings.wakeMinutes, settings.sleepMinutes, new Date(), 24, 60);
