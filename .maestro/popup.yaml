@@ -4,45 +4,43 @@
 # The over-the-lock-screen / screen-off delivery uses the same setShowWhenLocked + FSI mechanism
 # and is proven separately by the dumpsys alarm queue (see the workflow) — CI can't wait out a
 # real 15-min screen-off ping, but "Test the popup" launches the identical chooser Activity.
+#
+# NOTE: onboarding + Settings are long scroll views, so every action below scrolls its target
+# into the viewport first — a conditional `when: visible` would silently skip a below-the-fold
+# button (that exact mistake left the app stuck on onboarding in the first run).
 appId: agency.lumieremedia.timeaudit
 ---
 - launchApp
-# Onboarding hook screen ("...Where do they actually go?"). CTA is "Start my audit".
 - extendedWaitUntil:
     visible: "actually go.*"
     timeout: 60000
     optional: true
 - takeScreenshot: 01-onboarding
-- runFlow:
-    when:
-      visible: "Start my audit.*"
-    commands:
-      - tapOn: "Start my audit.*"
-# POST_NOTIFICATIONS runtime prompt (pre-granted in CI, but tap through if it appears).
+# Complete onboarding — the "Start my audit" CTA is below the fold; scroll to it, then tap.
+- scrollUntilVisible:
+    element:
+      text: "Start my audit.*"
+    direction: DOWN
+    timeout: 20000
+- tapOn: "Start my audit.*"
+# POST_NOTIFICATIONS prompt (pre-granted in CI; tap through if it still appears).
 - runFlow:
     when:
       visible: "Allow"
     commands:
       - tapOn: "Allow"
+# Landed in the app — the bottom tab bar (Today · Insights · Settings) is now present.
 - extendedWaitUntil:
-    visible: "Settings"
+    visible: "Insights"
     timeout: 20000
-    optional: true
 - takeScreenshot: 02-today
-# Into Settings, then fire the test popup.
-- tapOn:
-    text: "Settings"
-    optional: true
-- extendedWaitUntil:
-    visible: "Test the popup.*"
-    timeout: 15000
-    optional: true
+# Into Settings, scroll to the "Test the popup" button, fire it.
+- tapOn: "Settings"
 - scrollUntilVisible:
     element:
       text: "Test the popup.*"
     direction: DOWN
-    timeout: 15000
-    optional: true
+    timeout: 20000
 - takeScreenshot: 03-settings
 - tapOn: "Test the popup.*"
 # THE PROOF: the native full-screen chooser Activity appears over the app. Hard assert.
