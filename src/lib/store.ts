@@ -33,6 +33,7 @@ export interface Settings {
   sleepMinutes: number; // e.g. 23*60 = 1380
   intervalMinutes: number; // ping cadence in minutes (default 15; 5/10/15/20/30/45/60)
   categories: Category[]; // user-editable category list (seeded with DEFAULT_CATEGORIES)
+  pausedUntil: number; // epoch ms popups are snoozed until; 0 = not paused
 }
 
 export interface Entry {
@@ -67,6 +68,7 @@ const DEFAULT_SETTINGS: Settings = {
   sleepMinutes: 23 * 60,
   intervalMinutes: 15,
   categories: DEFAULT_CATEGORIES,
+  pausedUntil: 0,
 };
 
 interface State {
@@ -148,6 +150,25 @@ export async function updateSettings(patch: Partial<Settings>): Promise<Settings
   setState({ settings: next });
   await persistSettings(next);
   return next;
+}
+
+/** Snooze ALL popups for `durationMs` from now (e.g. 60*60*1000 = 1h). App.tsx re-arms the
+ *  schedule off this settings change, so the native scheduler skips the paused window and the
+ *  receiver stays silent until it passes. */
+export async function pausePopups(durationMs: number): Promise<Settings> {
+  return updateSettings({ pausedUntil: Date.now() + Math.max(0, durationMs) });
+}
+
+/** Clear any active snooze so popups resume immediately. */
+export async function resumePopups(): Promise<Settings> {
+  return updateSettings({ pausedUntil: 0 });
+}
+
+/** Milliseconds left on the current snooze, or 0 if not paused / expired. */
+export function pauseRemainingMs(): number {
+  const until = state.settings.pausedUntil;
+  const left = until - Date.now();
+  return left > 0 ? left : 0;
 }
 
 /** Log an activity for the slot containing `slotStart` (defaults to now's slot). Passing

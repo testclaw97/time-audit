@@ -60,6 +60,9 @@ export interface TimePingModule {
     intervalMinutes: number;
     wakeMinutes: number;
     sleepMinutes: number;
+    /** Epoch ms until which popups are snoozed. 0 / omitted = not paused. The scheduler skips
+     *  boundaries before this instant and the receiver stays silent until it passes. */
+    pausedUntilMs?: number;
   }): Promise<number>;
   /** Cancel every scheduled ping alarm (used when tracking is turned off). */
   cancelAll(): Promise<void>;

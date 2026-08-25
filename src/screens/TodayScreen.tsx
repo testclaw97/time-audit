@@ -1,20 +1,24 @@
-// Home / Today — a live timeline of today's 15-minute slots, newest at the top. Each slot
-// shows what you logged or an explicit "unlogged" gap (facing the truth). Consecutive
-// identical entries — and consecutive gaps — merge into one block. A quick-entry at the
-// top logs the current slot (or a slot you tap to edit).
+// Home / Today — a simple home: two summary boxes (working time + categories), a "pause
+// popups" snooze control, then the 15-minute timetable (newest at the top). Each slot shows
+// what you logged or an explicit "unlogged" gap (facing the truth). Consecutive identical
+// entries — and consecutive gaps — merge into one block. A quick-entry logs the current slot
+// (or a slot you tap to edit). Tap any timetable row to pick a category manually.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AppState, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppState, Modal, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space, type } from "../theme";
 import Card from "../ui/Card";
 import FadeIn from "../ui/FadeIn";
 import QuickEntry from "../ui/QuickEntry";
 import PressableScale from "../ui/PressableScale";
+import TimeField from "../ui/TimeField";
+import Button from "../ui/Button";
 import type { Category } from "../lib/store";
-import { logEntry, useStore } from "../lib/store";
+import { logEntry, pausePopups, resumePopups, updateSettings, useStore } from "../lib/store";
 import TimePing, { isAvailable } from "../../modules/time-ping";
 import {
   formatClock,
+  formatClockMinutes,
   formatDuration,
   getSlotMinutes,
   getSlotMs,
@@ -37,20 +41,64 @@ type Block =
     }
   | { kind: "gap"; start: number; end: number; count: number; hasNow: boolean };
 
-export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }) {
+// Snooze presets. "Until tomorrow" is computed at tap time from the wake boundary.
+const SNOOZE_PRESETS = [
+  { label: "30 min", ms: 30 * 60 * 1000 },
+  { label: "1 hour", ms: 60 * 60 * 1000 },
+  { label: "2 hours", ms: 2 * 60 * 60 * 1000 },
+] as const;
+
+/** Milliseconds from now until the next local wake boundary (today if still ahead, else
+ *  tomorrow) — the "silence popups until tomorrow morning" option. */
+function msUntilNextWake(wakeMinutes: number): number {
+  const now = new Date();
+  const wake = new Date(now);
+  wake.setHours(Math.floor(wakeMinutes / 60), wakeMinutes % 60, 0, 0);
+  if (wake.getTime() <= now.getTime()) wake.setDate(wake.getDate() + 1);
+  return wake.getTime() - now.getTime();
+}
+
+export default function TodayScreen({
+  focusSlot,
+  onManageCategories,
+}: {
+  focusSlot?: number | null;
+  /** Switch to the Settings tab so the user can add/edit categories. App.tsx wires this;
+   *  no-op (the box just isn't tappable) when undefined. */
+  onManageCategories?: () => void;
+}) {
   const insets = useSafeAreaInsets();
   const { settings, entries } = useStore();
   const [now, setNow] = useState(() => new Date());
   const [editing, setEditing] = useState<number | null>(null);
+  const [editHours, setEditHours] = useState(false);
+  const [showSnooze, setShowSnooze] = useState(false);
+  // A 1s heartbeat while paused so the remaining time stays fresh and the control flips back
+  // to "Pause popups" the moment the snooze expires. `nowMs` is only read by the snooze block.
+  const [nowMs, setNowMs] = useState(() => Date.now());
   // On a native Android build, whether the overlay grant is still missing (so the full-screen
   // popup can't cover the screen). Drives the nudge banner. Always false on web/iOS.
   const [overlayNeeded, setOverlayNeeded] = useState(false);
+
+  const paused = settings.pausedUntil > nowMs;
 
   // Keep the timeline live — refresh the "now" slot every 30s.
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  // While a snooze is active, tick every second so the "paused until …" line and the
+  // paused/not-paused flip stay accurate. No timer runs when popups aren't paused.
+  useEffect(() => {
+    if (settings.pausedUntil <= Date.now()) {
+      setNowMs(Date.now());
+      return;
+    }
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [settings.pausedUntil]);
 
   // Track the overlay grant on mount + on every return to the foreground (it's granted in a
   // system screen, so it flips off-screen). Guarded — no-op on web/iOS where the banner stays hidden.
@@ -109,7 +157,6 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
     () => slots.filter((s) => entries[String(s)]?.text?.trim()).length,
     [slots, entries],
   );
-  const unloggedCount = slots.length - loggedCount;
 
   // Build merged blocks in chronological order, then reverse (newest first). Consecutive
   // entries merge only when BOTH the label and the category id match.
@@ -185,9 +232,20 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
     logEntry("", editingSlot);
   };
 
+  // ---- snooze actions ----
+  const snooze = (ms: number) => {
+    void pausePopups(ms);
+    setShowSnooze(false);
+  };
+  const snoozeUntilTomorrow = () => snooze(msUntilNextWake(settings.wakeMinutes));
+  const resume = () => {
+    void resumePopups();
+    setShowSnooze(false);
+  };
+
   const dateLabel = now.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
+    weekday: "short",
+    month: "short",
     day: "numeric",
   });
 
@@ -215,24 +273,130 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
         </FadeIn>
       ) : null}
 
+      {/* Slim header */}
       <FadeIn>
-        <Text style={[type.label, styles.kicker]}>TODAY</Text>
-        <Text style={[type.title, styles.date]}>{dateLabel}</Text>
-
-        <Card tone="flat" style={styles.summary}>
-          <Stat value={String(loggedCount)} label="logged" tone="teal" />
-          <View style={styles.statDivider} />
-          <Stat value={String(unloggedCount)} label="unlogged" tone="gap" />
-          <View style={styles.statDivider} />
-          <Stat
-            value={formatDuration(loggedCount * slotMin)}
-            label="accounted"
-            tone="accent"
-          />
-        </Card>
+        <View style={styles.header}>
+          <Text style={[type.label, styles.kicker]}>TODAY</Text>
+          <Text style={[type.caption, styles.headerDate]}>{dateLabel}</Text>
+        </View>
       </FadeIn>
 
-      <FadeIn delay={90}>
+      {/* Two summary boxes: working time + categories */}
+      <FadeIn delay={60}>
+        <View style={styles.boxRow}>
+          <PressableScale
+            onPress={() => setEditHours(true)}
+            accessibilityLabel="Edit your working hours"
+            style={styles.boxWrap}
+            scaleTo={0.98}
+          >
+            <Card tone="flat" style={styles.box}>
+              <Text style={[type.label, styles.boxKicker]}>WORKING TIME</Text>
+              <Text style={[type.heading, styles.boxValue]} numberOfLines={1}>
+                {formatClockMinutes(settings.wakeMinutes)}–
+                {formatClockMinutes(settings.sleepMinutes)}
+              </Text>
+              <Text style={[type.caption, styles.boxSub]} numberOfLines={1}>
+                {loggedCount}/{slots.length} slots ·{" "}
+                {formatDuration(loggedCount * slotMin)}
+              </Text>
+              <Text style={styles.boxEdit}>Tap to edit</Text>
+            </Card>
+          </PressableScale>
+
+          <PressableScale
+            onPress={onManageCategories}
+            disabled={!onManageCategories}
+            accessibilityLabel="Manage categories"
+            style={styles.boxWrap}
+            scaleTo={0.98}
+          >
+            <Card tone="flat" style={styles.box}>
+              <Text style={[type.label, styles.boxKicker]}>CATEGORIES</Text>
+              <Text style={[type.heading, styles.boxValue]}>
+                {settings.categories.length}
+              </Text>
+              <View style={styles.catDots}>
+                {settings.categories.slice(0, 6).map((c) => (
+                  <View
+                    key={c.id}
+                    style={[styles.catDot, { backgroundColor: c.color }]}
+                  />
+                ))}
+                {settings.categories.length > 6 ? (
+                  <Text style={styles.catMore}>
+                    +{settings.categories.length - 6}
+                  </Text>
+                ) : null}
+              </View>
+              {onManageCategories ? (
+                <Text style={styles.boxEdit}>Tap to manage</Text>
+              ) : null}
+            </Card>
+          </PressableScale>
+        </View>
+      </FadeIn>
+
+      {/* Pause popups (snooze) */}
+      <FadeIn delay={110}>
+        {paused ? (
+          <Card tone="accent" style={styles.snoozePaused}>
+            <View style={styles.snoozePausedText}>
+              <Text style={[type.bodyStrong, styles.snoozePausedTitle]} numberOfLines={1}>
+                🔕 Popups paused until {formatClock(settings.pausedUntil)}
+              </Text>
+              <Text style={[type.caption, styles.snoozePausedSub]}>
+                No check-ins will pop up until then.
+              </Text>
+            </View>
+            <PressableScale
+              onPress={resume}
+              accessibilityLabel="Resume popups now"
+              style={styles.resumeBtn}
+            >
+              <Text style={styles.resumeText}>Resume</Text>
+            </PressableScale>
+          </Card>
+        ) : (
+          <View>
+            <PressableScale
+              onPress={() => setShowSnooze((v) => !v)}
+              accessibilityLabel="Pause popups"
+              style={styles.snoozeRow}
+              scaleTo={0.99}
+            >
+              <Text style={[type.bodyStrong, styles.snoozeRowText]}>🔕 Pause popups</Text>
+              <Text style={styles.snoozeChevron}>{showSnooze ? "▴" : "▾"}</Text>
+            </PressableScale>
+            {showSnooze ? (
+              <View style={styles.snoozeOptions}>
+                {SNOOZE_PRESETS.map((p) => (
+                  <PressableScale
+                    key={p.label}
+                    onPress={() => snooze(p.ms)}
+                    accessibilityLabel={`Pause popups for ${p.label}`}
+                    style={styles.snoozeChip}
+                    scaleTo={0.94}
+                  >
+                    <Text style={styles.snoozeChipText}>{p.label}</Text>
+                  </PressableScale>
+                ))}
+                <PressableScale
+                  onPress={snoozeUntilTomorrow}
+                  accessibilityLabel="Pause popups until tomorrow"
+                  style={styles.snoozeChip}
+                  scaleTo={0.94}
+                >
+                  <Text style={styles.snoozeChipText}>Until tomorrow</Text>
+                </PressableScale>
+              </View>
+            ) : null}
+          </View>
+        )}
+      </FadeIn>
+
+      {/* Current-slot quick entry (or the slot you're editing) */}
+      <FadeIn delay={150}>
         <View style={styles.entryHeader}>
           <Text style={[type.caption, styles.entryHeaderText]}>
             {editingIsCurrent
@@ -258,7 +422,9 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
         />
       </FadeIn>
 
+      {/* The 15-minute timetable */}
       <View style={styles.timeline}>
+        <Text style={[type.label, styles.timelineLabel]}>TIMETABLE · tap a slot to log</Text>
         {blocks.length === 0 ? (
           <Card tone="flat" style={styles.empty}>
             <Text style={styles.emptyIcon}>🕒</Text>
@@ -279,26 +445,42 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
           ))
         )}
       </View>
-    </ScrollView>
-  );
-}
 
-function Stat({
-  value,
-  label,
-  tone,
-}: {
-  value: string;
-  label: string;
-  tone: "teal" | "gap" | "accent";
-}) {
-  const color =
-    tone === "teal" ? colors.teal : tone === "accent" ? colors.accent : colors.gapText;
-  return (
-    <View style={styles.stat}>
-      <Text style={[styles.statValue, { color }]}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
+      {/* Working-hours editor */}
+      <Modal
+        visible={editHours}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditHours(false)}
+      >
+        <View style={styles.modalScrim}>
+          <View style={styles.modalCard}>
+            <Text style={[type.heading, styles.modalTitle]}>Working hours</Text>
+            <Text style={[type.caption, styles.modalSub]}>
+              The window Time Audit tracks and pings you within.
+            </Text>
+            <Card style={styles.modalFieldCard}>
+              <TimeField
+                label="Wake up"
+                icon="☀️"
+                minutes={settings.wakeMinutes}
+                onChange={(m) => updateSettings({ wakeMinutes: m })}
+              />
+              <View style={styles.modalDivider} />
+              <TimeField
+                label="Wind down"
+                icon="🌙"
+                minutes={settings.sleepMinutes}
+                onChange={(m) => updateSettings({ sleepMinutes: m })}
+              />
+            </Card>
+            <View style={styles.modalActions}>
+              <Button label="Done" onPress={() => setEditHours(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
   );
 }
 
@@ -408,8 +590,10 @@ function SlotBlock({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: space.s3, gap: space.s3 },
-  kicker: { color: colors.accent, marginBottom: 2 },
-  date: { color: colors.fg, marginBottom: space.s2 },
+
+  header: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between" },
+  kicker: { color: colors.accent },
+  headerDate: { color: colors.muted, fontWeight: "700" },
 
   overlayBanner: {
     flexDirection: "row",
@@ -422,11 +606,60 @@ const styles = StyleSheet.create({
     paddingVertical: space.s1 + 2,
   },
   overlayBannerText: { ...type.caption, color: colors.accent2, fontWeight: "700", flex: 1 },
-  summary: { flexDirection: "row", alignItems: "center", paddingVertical: space.s2 },
-  stat: { flex: 1, alignItems: "center", gap: 2 },
-  statValue: { fontSize: 22, fontWeight: "800", letterSpacing: -0.3 },
-  statLabel: { ...type.caption, color: colors.muted },
-  statDivider: { width: StyleSheet.hairlineWidth, height: 34, backgroundColor: colors.line },
+
+  // two summary boxes
+  boxRow: { flexDirection: "row", gap: space.s2 },
+  boxWrap: { flex: 1 },
+  box: { paddingVertical: space.s2, gap: 4, minHeight: 118, justifyContent: "flex-start" },
+  boxKicker: { color: colors.muted },
+  boxValue: { color: colors.fg, marginTop: 2 },
+  boxSub: { color: colors.fg2 },
+  boxEdit: { ...type.caption, color: colors.accent, fontWeight: "700", marginTop: "auto" },
+  catDots: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5, marginTop: 2 },
+  catDot: { width: 11, height: 11, borderRadius: 6 },
+  catMore: { ...type.caption, color: colors.muted, fontWeight: "700", marginLeft: 2 },
+
+  // snooze
+  snoozeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.surface2,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1 + 4,
+  },
+  snoozeRowText: { color: colors.fg2 },
+  snoozeChevron: { color: colors.muted, fontSize: 14, fontWeight: "800" },
+  snoozeOptions: { flexDirection: "row", flexWrap: "wrap", gap: space.s1, marginTop: space.s1 },
+  snoozeChip: {
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+  },
+  snoozeChipText: { color: colors.fg2, fontWeight: "700", fontSize: 14 },
+  snoozePaused: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: space.s2,
+    gap: space.s2,
+  },
+  snoozePausedText: { flex: 1 },
+  snoozePausedTitle: { color: colors.accent2 },
+  snoozePausedSub: { color: colors.muted, marginTop: 2 },
+  resumeBtn: {
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
+  },
+  resumeText: { color: colors.onAccent, fontWeight: "800", fontSize: 14 },
 
   entryHeader: {
     flexDirection: "row",
@@ -438,6 +671,7 @@ const styles = StyleSheet.create({
   cancel: { color: colors.muted, fontSize: 13, fontWeight: "700" },
 
   timeline: { gap: space.s0 },
+  timelineLabel: { color: colors.muted, marginBottom: space.s1 },
   empty: { alignItems: "center", paddingVertical: space.s4, gap: space.s1 },
   emptyIcon: { fontSize: 30, marginBottom: space.s0 },
   emptyTitle: { color: colors.fg },
@@ -507,4 +741,28 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   nowBadgeText: { color: colors.onAccent, fontSize: 10, fontWeight: "800", letterSpacing: 0.6 },
+
+  // working-hours modal
+  modalScrim: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    padding: space.s3,
+  },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.lineStrong,
+    padding: space.s3,
+  },
+  modalTitle: { color: colors.fg, marginBottom: space.s0 },
+  modalSub: { color: colors.muted, marginBottom: space.s2 },
+  modalFieldCard: { gap: space.s0 },
+  modalDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.line,
+    marginVertical: space.s0,
+  },
+  modalActions: { marginTop: space.s3 },
 });

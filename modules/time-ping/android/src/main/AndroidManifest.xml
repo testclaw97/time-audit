@@ -43,6 +43,21 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
         tools:ignore="BatteryLife" />
+    <!--
+      FOREGROUND_SERVICE (+ FOREGROUND_SERVICE_SPECIAL_USE on API 34+) — PingOverlayService runs
+      as a foreground service so it may draw the full-screen chooser OVERLAY window while the
+      phone is unlocked/in use. Starting the chooser as an Activity from a background alarm is
+      blocked by the Android 14/15 background-activity-launch restriction (it degrades the
+      full-screen intent to a heads-up); a foreground service + SYSTEM_ALERT_WINDOW overlay is
+      the reliable full-screen path (same mechanism as Mr. Productive's block screen).
+      "specialUse" is the honest FGS subtype — none of the predefined subtypes describe a
+      transient check-in chooser.
+      WAKE_LOCK — the service briefly acquires a SCREEN_BRIGHT wakelock (~30s) so a ping that
+      lands as the display is dimming still wakes the screen to show the chooser.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application>
         <!--
@@ -68,6 +83,25 @@
             android:showOnLockScreen="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             tools:ignore="LockedOrientationActivity" />
+
+        <!--
+          The UNLOCKED / in-use ping surface: a foreground service that draws the category
+          chooser as a full-screen SYSTEM_ALERT_WINDOW overlay. Used instead of launching
+          PingActivity from the background (which Android 14/15 degrades to a heads-up). The
+          locked / screen-off case still uses PingActivity via the FSI notification.
+            · exported=false            — only our own PingReceiver may start it.
+            · foregroundServiceType=specialUse — required on API 34+ and must match the type
+                                         passed to startForeground(); the property string is the
+                                         human justification surfaced to Play reviewers.
+        -->
+        <service
+            android:name="agency.lumieremedia.timeaudit.timeping.PingOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Time-audit check-in: briefly draws a full-screen category chooser over the screen when a scheduled 15-minute ping fires, dismissed as soon as the user taps a category." />
+        </service>
 
         <!--
           Receives the AlarmManager broadcast (ACTION_FIRE) to post the FSI notification and
