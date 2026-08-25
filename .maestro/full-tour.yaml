@@ -1,0 +1,81 @@
+# Full human-style tour of EVERY screen + flow, screenshotting each step so a human (me) can
+# review the whole app end-to-end. Runs on a fresh install (onboarding first). Most steps are
+# optional so a single label mismatch never aborts the tour — the screenshots are the review.
+appId: agency.lumieremedia.timeaudit
+---
+- launchApp
+# ---------- ONBOARDING ----------
+- extendedWaitUntil: { visible: "actually go.*", timeout: 60000, optional: true }
+- takeScreenshot: t01-onboarding-hook
+- scrollUntilVisible:
+    element: { text: "Start my audit.*" }
+    direction: DOWN
+    timeout: 20000
+    optional: true
+- takeScreenshot: t02-onboarding-bottom
+- tapOn: { text: "Start my audit.*", optional: true }
+- runFlow:
+    when: { visible: "Allow" }
+    commands: [ { tapOn: "Allow" } ]
+- takeScreenshot: t03-after-start
+# Overlay-permission onboarding step (appears only if overlay not granted; CI grants it, so usually skipped)
+- runFlow:
+    when: { visible: "Skip for now.*" }
+    commands: [ { tapOn: "Skip for now.*" } ]
+# ---------- HOME ----------
+- extendedWaitUntil: { visible: "WORKING TIME", timeout: 20000, optional: true }
+- takeScreenshot: t04-home
+# Working-time box -> hours editor
+- tapOn: { text: "Tap to edit", optional: true }
+- takeScreenshot: t05-workingtime-editor
+- pressKey: Back
+- takeScreenshot: t06-home-after-editor
+# Pause popups: open options, pick 1 hour, verify paused, resume
+- tapOn: { text: "Pause popups", optional: true }
+- takeScreenshot: t07-pause-options
+- tapOn: { text: "1 hour", optional: true }
+- takeScreenshot: t08-paused-state
+- tapOn: { text: "Resume", optional: true }
+- takeScreenshot: t09-resumed
+# Timetable: log the current slot by tapping a category chip
+- tapOn: { text: "Deep work", optional: true }
+- takeScreenshot: t10-logged-deepwork
+# ---------- INSIGHTS ----------
+- tapOn: { text: "Insights", optional: true }
+- extendedWaitUntil: { visible: "Insights", timeout: 8000, optional: true }
+- takeScreenshot: t11-insights
+# ---------- SETTINGS ----------
+- tapOn: { text: "Settings", optional: true }
+- takeScreenshot: t12-settings-top
+- scrollUntilVisible:
+    element: { text: "30m" }
+    direction: DOWN
+    timeout: 12000
+    optional: true
+- tapOn: { text: "30m", optional: true }
+- takeScreenshot: t13-interval-30m
+- scrollUntilVisible:
+    element: { text: "Add category.*" }
+    direction: DOWN
+    timeout: 12000
+    optional: true
+- takeScreenshot: t14-categories
+- tapOn: { text: "Add category.*", optional: true }
+- takeScreenshot: t15-category-editor
+- pressKey: Back
+- scrollUntilVisible:
+    element: { text: "Show over other apps.*" }
+    direction: DOWN
+    timeout: 12000
+    optional: true
+- takeScreenshot: t16-permissions
+- scrollUntilVisible:
+    element: { text: "Test the popup.*" }
+    direction: DOWN
+    timeout: 12000
+    optional: true
+- tapOn: { text: "Test the popup.*", optional: true }
+- extendedWaitUntil: { visible: "What are you doing right now.*", timeout: 12000, optional: true }
+- takeScreenshot: t17-popup-from-settings
+- tapOn: { text: "Rest", optional: true }
+- takeScreenshot: t18-after-popup
