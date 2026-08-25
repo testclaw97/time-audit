@@ -2,8 +2,8 @@
 // shows what you logged or an explicit "unlogged" gap (facing the truth). Consecutive
 // identical entries — and consecutive gaps — merge into one block. A quick-entry at the
 // top logs the current slot (or a slot you tap to edit).
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { AppState, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space, type } from "../theme";
 import Card from "../ui/Card";
@@ -12,6 +12,7 @@ import QuickEntry from "../ui/QuickEntry";
 import PressableScale from "../ui/PressableScale";
 import type { Category } from "../lib/store";
 import { logEntry, useStore } from "../lib/store";
+import TimePing, { isAvailable } from "../../modules/time-ping";
 import {
   formatClock,
   formatDuration,
@@ -41,12 +42,47 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
   const { settings, entries } = useStore();
   const [now, setNow] = useState(() => new Date());
   const [editing, setEditing] = useState<number | null>(null);
+  // On a native Android build, whether the overlay grant is still missing (so the full-screen
+  // popup can't cover the screen). Drives the nudge banner. Always false on web/iOS.
+  const [overlayNeeded, setOverlayNeeded] = useState(false);
 
   // Keep the timeline live — refresh the "now" slot every 30s.
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  // Track the overlay grant on mount + on every return to the foreground (it's granted in a
+  // system screen, so it flips off-screen). Guarded — no-op on web/iOS where the banner stays hidden.
+  const refreshOverlay = useCallback(async () => {
+    if (!isAvailable() || !TimePing) {
+      setOverlayNeeded(false);
+      return;
+    }
+    try {
+      setOverlayNeeded(!(await TimePing.hasOverlayPermission()));
+    } catch (e) {
+      console.warn("[today] hasOverlayPermission failed", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshOverlay();
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") refreshOverlay();
+    });
+    return () => sub.remove();
+  }, [refreshOverlay]);
+
+  const requestOverlay = async () => {
+    if (!isAvailable() || !TimePing) return;
+    try {
+      await TimePing.requestOverlayPermission();
+    } catch (e) {
+      console.warn("[today] requestOverlayPermission failed", e);
+    }
+    refreshOverlay();
+  };
 
   // A notification tap can ask us to edit a specific slot.
   useEffect(() => {
@@ -164,6 +200,21 @@ export default function TodayScreen({ focusSlot }: { focusSlot?: number | null }
       ]}
       showsVerticalScrollIndicator={false}
     >
+      {overlayNeeded ? (
+        <FadeIn>
+          <PressableScale
+            onPress={requestOverlay}
+            accessibilityLabel="The full-screen popup can't show yet. Tap to enable."
+            style={styles.overlayBanner}
+            scaleTo={0.99}
+          >
+            <Text style={styles.overlayBannerText}>
+              ⚠️ The full-screen popup can't show yet — tap to enable.
+            </Text>
+          </PressableScale>
+        </FadeIn>
+      ) : null}
+
       <FadeIn>
         <Text style={[type.label, styles.kicker]}>TODAY</Text>
         <Text style={[type.title, styles.date]}>{dateLabel}</Text>
@@ -268,6 +319,29 @@ function SlotBlock({
       ? `${block.count} × ${slotMin}m · ${formatDuration(block.count * slotMin)}`
       : range;
 
+  // Unlogged time is optional — fill it later, or never. So a past/idle gap is rendered as a
+  // single quiet muted line, NOT a card that competes with real entries. The current ("now")
+  // slot is the one exception: it stays a prompt so you can log where you are right now.
+  if (block.kind === "gap" && !block.hasNow) {
+    const gapLabel =
+      block.count > 1 ? `${block.count} slots not logged yet` : `${range} · not logged`;
+    return (
+      <PressableScale
+        onPress={() => onEdit(block.start)}
+        accessibilityLabel={`Log unlogged time ${range}`}
+        style={styles.gapQuietRow}
+        scaleTo={0.99}
+      >
+        <View style={styles.gapQuietRail}>
+          <View style={styles.gapQuietDot} />
+        </View>
+        <Text style={[type.caption, styles.gapQuietText]} numberOfLines={1}>
+          · {gapLabel}
+        </Text>
+      </PressableScale>
+    );
+  }
+
   // A per-category color on the rail dot when the entry carries one; teal for a custom
   // (uncategorized) entry; the dim gap tone for an unlogged block.
   const catColor = block.kind === "entry" ? block.color : undefined;
@@ -336,6 +410,18 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: space.s3, gap: space.s3 },
   kicker: { color: colors.accent, marginBottom: 2 },
   date: { color: colors.fg, marginBottom: space.s2 },
+
+  overlayBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.accentSoft,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accentLine,
+    borderRadius: radius.md,
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1 + 2,
+  },
+  overlayBannerText: { ...type.caption, color: colors.accent2, fontWeight: "700", flex: 1 },
   summary: { flexDirection: "row", alignItems: "center", paddingVertical: space.s2 },
   stat: { flex: 1, alignItems: "center", gap: 2 },
   statValue: { fontSize: 22, fontWeight: "800", letterSpacing: -0.3 },
@@ -400,6 +486,18 @@ const styles = StyleSheet.create({
   entryEmoji: { fontSize: 17 },
   entryText: { color: colors.fg, flex: 1 },
   gapText: { color: colors.gapText, fontStyle: "italic" },
+
+  // Quiet, de-emphasized unlogged line (past/idle gaps) — a thin muted row, not a card.
+  gapQuietRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s2,
+    paddingVertical: space.s0,
+    marginBottom: space.s1,
+  },
+  gapQuietRail: { width: 14, alignItems: "center" },
+  gapQuietDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.gap },
+  gapQuietText: { color: colors.gapText, flex: 1 },
   spanText: { ...type.caption, color: colors.muted },
   spanSub: { ...type.caption, color: colors.muted, marginTop: 4 },
   nowBadge: {

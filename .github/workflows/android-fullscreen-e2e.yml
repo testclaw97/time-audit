@@ -10,7 +10,7 @@ name: Full-screen popup E2E
 on:
   workflow_dispatch: {}
   push:
-    branches: [feature/fullscreen-ping]
+    branches: [feature/fullscreen-ping, "fix/**"]
 
 jobs:
   build-and-test:
@@ -61,6 +61,9 @@ jobs:
             adb install -r android/app/build/outputs/apk/release/app-release.apk
             # Pre-grant the notification permission so onboarding + the popup flow without a dialog.
             adb shell "pm grant $PKG android.permission.POST_NOTIFICATIONS" || true
+            # Grant "Display over other apps" so the overlay-backed direct launch path is exercised
+            # (this is what makes the chooser cover the whole screen while the phone is in use).
+            adb shell "appops set $PKG SYSTEM_ALERT_WINDOW allow" || true
             mkdir -p shots
             adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 || true
             sleep 8

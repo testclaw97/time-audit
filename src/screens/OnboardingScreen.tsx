@@ -2,9 +2,10 @@
 // promises a two-second one-tap answer even from the lock screen, then collects the awake
 // window + ping interval and, on the CTA, requests notification permission + schedules pings.
 // The onDone wiring (onboarded/tracking via updateSettings, then reschedule) is preserved.
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  AppState,
   Platform,
   ScrollView,
   StyleSheet,
@@ -19,6 +20,7 @@ import FadeIn from "../ui/FadeIn";
 import TimeField from "../ui/TimeField";
 import PressableScale from "../ui/PressableScale";
 import { updateSettings } from "../lib/store";
+import TimePing, { isAvailable } from "../../modules/time-ping";
 import {
   requestPermission,
   reschedulePings,
@@ -34,9 +36,34 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const [sleep, setSleep] = useState(23 * 60);
   const [interval, setInterval] = useState(15);
   const [busy, setBusy] = useState(false);
+  // Two-step flow: "intro" collects the window/interval and arms pings; "permission" asks for
+  // the overlay grant (the KEY special-access perm that lets the popup cover the screen). Step 2
+  // only ever appears on a native Android build where the grant is actually missing.
+  const [step, setStep] = useState<"intro" | "permission">("intro");
+  const [overlayGranted, setOverlayGranted] = useState(false);
 
   const windowMinutes = (sleep - wake + 24 * 60) % (24 * 60) || 24 * 60;
   const pingsPerDay = Math.floor(windowMinutes / interval);
+
+  // Re-check the overlay grant on entering step 2 + whenever we return to the foreground (the
+  // user grants it in a system Settings screen, so the value flips off-screen).
+  const refreshOverlay = useCallback(async () => {
+    if (!isAvailable() || !TimePing) return;
+    try {
+      setOverlayGranted(await TimePing.hasOverlayPermission());
+    } catch (e) {
+      console.warn("[onboarding] hasOverlayPermission failed", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (step !== "permission") return;
+    refreshOverlay();
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") refreshOverlay();
+    });
+    return () => sub.remove();
+  }, [step, refreshOverlay]);
 
   const start = async () => {
     setBusy(true);
@@ -57,7 +84,21 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
           `Time Audit needs notification permission to pop up every ${interval} minutes. You can still log inside the app, and enable pings later in Settings.`,
         );
       }
-      onDone();
+      // On a native Android build, if the popup can't cover the screen yet, don't silently
+      // finish — advance to the overlay-permission step. Never block: any failure just finishes.
+      let needOverlay = false;
+      if (isAvailable() && TimePing) {
+        try {
+          needOverlay = !(await TimePing.hasOverlayPermission());
+        } catch (e) {
+          console.warn("[onboarding] hasOverlayPermission check failed", e);
+        }
+      }
+      if (needOverlay) {
+        setStep("permission");
+      } else {
+        onDone();
+      }
     } catch (e) {
       console.warn("[onboarding] start failed", e);
       onDone();
@@ -65,6 +106,101 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
       setBusy(false);
     }
   };
+
+  const requestOverlay = async () => {
+    if (!isAvailable() || !TimePing) return;
+    try {
+      await TimePing.requestOverlayPermission();
+    } catch (e) {
+      console.warn("[onboarding] requestOverlayPermission failed", e);
+    }
+    // The grant lands in a system screen; refreshOverlay also fires on AppState 'active'.
+    refreshOverlay();
+  };
+
+  if (step === "permission") {
+    return (
+      <ScrollView
+        style={styles.root}
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top + space.s4, paddingBottom: insets.bottom + space.s4 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <FadeIn>
+          <Text style={styles.kicker}>ONE LAST THING</Text>
+          <Text style={[type.display, styles.title]}>
+            Let the popup{"\n"}cover your screen.
+          </Text>
+        </FadeIn>
+
+        <FadeIn delay={110}>
+          <Card tone="accent" style={styles.promise}>
+            <Text style={[type.body, styles.promiseText]}>
+              Android needs one permission so the check-in can pop up over whatever you're
+              doing — even from your lock screen.
+            </Text>
+          </Card>
+        </FadeIn>
+
+        <FadeIn delay={180}>
+          <Card style={styles.permStatusCard} tone="flat">
+            <View style={styles.permStatusRow}>
+              <Text style={[type.bodyStrong, styles.permStatusTitle]}>
+                Display over other apps
+              </Text>
+              <Text
+                style={[
+                  type.caption,
+                  styles.permStatusState,
+                  { color: overlayGranted ? colors.teal : colors.accent },
+                ]}
+              >
+                {overlayGranted ? "Granted ✓" : "Needed"}
+              </Text>
+            </View>
+            <Text style={[type.caption, styles.permStatusNote]}>
+              Required for the full-screen popup to appear while your phone is in use.
+            </Text>
+          </Card>
+        </FadeIn>
+
+        <FadeIn delay={260}>
+          {overlayGranted ? (
+            <Button
+              label="You're all set"
+              icon="✓"
+              onPress={onDone}
+              style={styles.cta}
+              testID="onboarding-done"
+            />
+          ) : (
+            <Button
+              label="Allow full-screen popup"
+              icon="▸"
+              onPress={requestOverlay}
+              style={styles.cta}
+              testID="allow-overlay"
+            />
+          )}
+          {!overlayGranted ? (
+            <PressableScale
+              onPress={onDone}
+              accessibilityLabel="Skip for now"
+              style={styles.skipRow}
+              testID="onboarding-skip"
+            >
+              <Text style={styles.skipText}>Skip for now</Text>
+            </PressableScale>
+          ) : null}
+          <Text style={styles.privacy}>
+            You can fine-tune alarms & lock-screen access anytime in Settings.
+          </Text>
+        </FadeIn>
+      </ScrollView>
+    );
+  }
 
   return (
     <ScrollView
@@ -244,4 +380,13 @@ const styles = StyleSheet.create({
   hint: { ...type.caption, color: colors.muted, marginTop: space.s1, textAlign: "center" },
   cta: { marginTop: space.s1 },
   privacy: { ...type.caption, color: colors.faint, textAlign: "center", marginTop: space.s2 },
+
+  // permission step (step 2)
+  permStatusCard: { gap: space.s1 },
+  permStatusRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  permStatusTitle: { color: colors.fg },
+  permStatusState: { fontWeight: "700" },
+  permStatusNote: { color: colors.muted },
+  skipRow: { alignSelf: "center", paddingVertical: space.s2, marginTop: space.s0 },
+  skipText: { ...type.bodyStrong, color: colors.muted },
 });
