@@ -16,13 +16,17 @@ appId: agency.lumieremedia.timeaudit
     timeout: 60000
     optional: true
 - takeScreenshot: 01-onboarding
-# Complete onboarding — the "Start my audit" CTA is below the fold; scroll to it, then tap.
+# Complete onboarding IF it's showing (this flow may run after another already onboarded the
+# app in the same job — then these are skipped and we're already on the home screen).
 - scrollUntilVisible:
     element:
       text: "Start my audit.*"
     direction: DOWN
-    timeout: 20000
-- tapOn: "Start my audit.*"
+    timeout: 15000
+    optional: true
+- tapOn:
+    text: "Start my audit.*"
+    optional: true
 # POST_NOTIFICATIONS prompt (pre-granted in CI; tap through if it still appears).
 - runFlow:
     when:

@@ -72,6 +72,9 @@ export default function TodayScreen({
   const [now, setNow] = useState(() => new Date());
   const [editing, setEditing] = useState<number | null>(null);
   const [editHours, setEditHours] = useState(false);
+  // Which unlogged gap (by its start epoch) is expanded into individual check-ins, if any.
+  // Only one gap expands at a time — keeps the timetable calm.
+  const [expandedGap, setExpandedGap] = useState<number | null>(null);
   const [showSnooze, setShowSnooze] = useState(false);
   // A 1s heartbeat while paused so the remaining time stays fresh and the control flips back
   // to "Pause popups" the moment the snooze expires. `nowMs` is only read by the snooze block.
@@ -296,9 +299,9 @@ export default function TodayScreen({
                 {formatClockMinutes(settings.wakeMinutes)}–
                 {formatClockMinutes(settings.sleepMinutes)}
               </Text>
-              <Text style={[type.caption, styles.boxSub]} numberOfLines={1}>
-                {loggedCount}/{slots.length} slots ·{" "}
-                {formatDuration(loggedCount * slotMin)}
+              <Text style={[type.caption, styles.boxSub]} numberOfLines={2}>
+                {formatDuration(loggedCount * slotMin)} logged · {loggedCount} of{" "}
+                {slots.length} check-ins
               </Text>
               <Text style={styles.boxEdit}>Tap to edit</Text>
             </Card>
@@ -412,7 +415,7 @@ export default function TodayScreen({
         <QuickEntry
           key={editingSlot}
           placeholder={
-            editingIsCurrent ? "e.g. deep work, email, lunch…" : "Log this slot…"
+            editingIsCurrent ? "e.g. deep work, email, lunch…" : "Log this check-in…"
           }
           categories={settings.categories}
           onPickCategory={pickCategory}
@@ -424,13 +427,13 @@ export default function TodayScreen({
 
       {/* The 15-minute timetable */}
       <View style={styles.timeline}>
-        <Text style={[type.label, styles.timelineLabel]}>TIMETABLE · tap a slot to log</Text>
+        <Text style={[type.label, styles.timelineLabel]}>TIMETABLE · tap a time to log</Text>
         {blocks.length === 0 ? (
           <Card tone="flat" style={styles.empty}>
             <Text style={styles.emptyIcon}>🕒</Text>
             <Text style={[type.bodyStrong, styles.emptyTitle]}>Your day starts here</Text>
             <Text style={[type.caption, styles.emptyBody]}>
-              The first slot opens at your wake time. Log what you're doing above.
+              Your first check-in opens at your wake time. Log what you're doing above.
             </Text>
           </Card>
         ) : (
@@ -439,8 +442,15 @@ export default function TodayScreen({
               key={`${b.kind}-${b.start}`}
               block={b}
               slotMin={slotMin}
+              slotMs={slotMs}
               onEdit={(slot) => setEditing(slotStartFor(slot))}
               selected={editingSlot >= b.start && editingSlot < b.end && !editingIsCurrent}
+              editingSlot={editingSlot}
+              editingIsCurrent={editingIsCurrent}
+              expanded={b.kind === "gap" && expandedGap === b.start}
+              onToggleExpand={(start) =>
+                setExpandedGap((cur) => (cur === start ? null : start))
+              }
             />
           ))
         )}
@@ -484,16 +494,30 @@ export default function TodayScreen({
   );
 }
 
+// How many individual check-ins an expanded gap renders at most (newest first). 24 × 15m =
+// 6 hours — enough to fill in a forgotten afternoon without dumping hundreds of rows.
+const GAP_EXPAND_CAP = 24;
+
 function SlotBlock({
   block,
   slotMin,
+  slotMs,
   onEdit,
   selected,
+  editingSlot,
+  editingIsCurrent,
+  expanded,
+  onToggleExpand,
 }: {
   block: Block;
   slotMin: number;
+  slotMs: number;
   onEdit: (slot: number) => void;
   selected: boolean;
+  editingSlot: number;
+  editingIsCurrent: boolean;
+  expanded: boolean;
+  onToggleExpand: (start: number) => void;
 }) {
   const range = `${formatClock(block.start)}–${formatClock(block.end)}`;
   const spanLabel =
@@ -505,22 +529,94 @@ function SlotBlock({
   // single quiet muted line, NOT a card that competes with real entries. The current ("now")
   // slot is the one exception: it stays a prompt so you can log where you are right now.
   if (block.kind === "gap" && !block.hasNow) {
-    const gapLabel =
-      block.count > 1 ? `${block.count} slots not logged yet` : `${range} · not logged`;
+    // A single unlogged check-in has nothing to expand — tap logs it straight away.
+    if (block.count <= 1) {
+      return (
+        <PressableScale
+          onPress={() => onEdit(block.start)}
+          accessibilityLabel={`Log the ${range} check-in`}
+          style={styles.gapQuietRow}
+          scaleTo={0.99}
+        >
+          <View style={styles.gapQuietRail}>
+            <View style={styles.gapQuietDot} />
+          </View>
+          <Text style={[type.caption, styles.gapQuietText]} numberOfLines={1}>
+            · {range} · not logged
+          </Text>
+          <Text style={styles.gapHint}>tap to log</Text>
+        </PressableScale>
+      );
+    }
+
+    // A merged gap of several check-ins: expandable so you can pick the exact 15 minutes to
+    // fill in, rather than being dropped on just the first one.
+    const gapLabel = `${range} · ${block.count} not logged`;
+
+    if (!expanded) {
+      return (
+        <PressableScale
+          onPress={() => onToggleExpand(block.start)}
+          accessibilityLabel={`Show the ${block.count} check-ins from ${range} to fill one in`}
+          style={styles.gapQuietRow}
+          scaleTo={0.99}
+        >
+          <View style={styles.gapQuietRail}>
+            <View style={styles.gapQuietDot} />
+          </View>
+          <Text style={[type.caption, styles.gapQuietText]} numberOfLines={1}>
+            · {gapLabel}
+          </Text>
+          <Text style={styles.gapHint}>▾ tap to fill one in</Text>
+        </PressableScale>
+      );
+    }
+
+    // Newest check-in first, capped so a huge gap never renders hundreds of rows.
+    const slotsDesc: number[] = [];
+    for (let t = block.end - slotMs; t >= block.start; t -= slotMs) slotsDesc.push(t);
+    const shown = slotsDesc.slice(0, GAP_EXPAND_CAP);
+    const earlier = slotsDesc.length - shown.length;
+
     return (
-      <PressableScale
-        onPress={() => onEdit(block.start)}
-        accessibilityLabel={`Log unlogged time ${range}`}
-        style={styles.gapQuietRow}
-        scaleTo={0.99}
-      >
-        <View style={styles.gapQuietRail}>
-          <View style={styles.gapQuietDot} />
+      <View>
+        <PressableScale
+          onPress={() => onToggleExpand(block.start)}
+          accessibilityLabel={`Collapse the ${range} check-ins`}
+          style={styles.gapQuietRow}
+          scaleTo={0.99}
+        >
+          <View style={styles.gapQuietRail}>
+            <View style={styles.gapQuietDot} />
+          </View>
+          <Text style={[type.caption, styles.gapQuietText]} numberOfLines={1}>
+            · {gapLabel}
+          </Text>
+          <Text style={styles.gapHint}>▴ tap to collapse</Text>
+        </PressableScale>
+
+        <View style={styles.gapExpanded}>
+          {shown.map((slot) => {
+            const slotRange = `${formatClock(slot)}–${formatClock(slot + slotMs)}`;
+            const isSel = !editingIsCurrent && editingSlot === slot;
+            return (
+              <PressableScale
+                key={slot}
+                onPress={() => onEdit(slot)}
+                accessibilityLabel={`Log the ${slotRange} check-in`}
+                style={[styles.gapSlotRow, isSel && styles.gapSlotRowSelected]}
+                scaleTo={0.98}
+              >
+                <Text style={[type.mono, styles.gapSlotTime]}>{slotRange}</Text>
+                <Text style={styles.gapSlotHint}>{isSel ? "logging…" : "tap to log"}</Text>
+              </PressableScale>
+            );
+          })}
+          {earlier > 0 ? (
+            <Text style={styles.gapEarlier}>+{earlier} earlier</Text>
+          ) : null}
         </View>
-        <Text style={[type.caption, styles.gapQuietText]} numberOfLines={1}>
-          · {gapLabel}
-        </Text>
-      </PressableScale>
+      </View>
     );
   }
 
@@ -564,7 +660,7 @@ function SlotBlock({
               <Text style={styles.nowBadgeText}>NOW</Text>
             </View>
           ) : block.count > 1 ? (
-            <Text style={styles.spanText}>{block.count} slots</Text>
+            <Text style={styles.spanText}>{block.count} check-ins</Text>
           ) : null}
         </View>
 
@@ -732,6 +828,29 @@ const styles = StyleSheet.create({
   gapQuietRail: { width: 14, alignItems: "center" },
   gapQuietDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.gap },
   gapQuietText: { color: colors.gapText, flex: 1 },
+  gapHint: { ...type.caption, color: colors.accent, fontWeight: "700", marginLeft: space.s1 },
+
+  // Expanded gap: individual 15-min check-ins, indented to line up under the gap's text.
+  gapExpanded: { marginLeft: 14 + space.s2, marginBottom: space.s1, gap: space.s0 },
+  gapSlotRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gap,
+    borderStyle: "dashed",
+  },
+  gapSlotRowSelected: {
+    borderColor: colors.accent,
+    borderStyle: "solid",
+    backgroundColor: colors.accentSoft,
+  },
+  gapSlotTime: { color: colors.fg2, fontVariant: ["tabular-nums"] },
+  gapSlotHint: { ...type.caption, color: colors.accent, fontWeight: "700" },
+  gapEarlier: { ...type.caption, color: colors.muted, marginTop: 2, paddingHorizontal: space.s2 },
   spanText: { ...type.caption, color: colors.muted },
   spanSub: { ...type.caption, color: colors.muted, marginTop: 4 },
   nowBadge: {

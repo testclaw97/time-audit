@@ -115,11 +115,17 @@ class PingOverlayService : Service() {
         // same approach as BlockerService. TURN_SCREEN_ON + SHOW_WHEN_LOCKED + DISMISS_KEYGUARD
         // wake/surface the window if the display was just dimming; KEEP_SCREEN_ON stops it
         // dimming out mid-decision. OPAQUE so the app underneath doesn't bleed through.
+        // LAYOUT_IN_SCREEN + LAYOUT_NO_LIMITS make the window fill the ENTIRE screen, including
+        // BEHIND the status bar — without them the overlay lays out below the status bar and the
+        // app underneath peeks through that top strip (so the chooser must "cover the whole
+        // screen"). The status bar icons still render on top, like any immersive full-screen app.
         @Suppress("DEPRECATION")
         val flags = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,

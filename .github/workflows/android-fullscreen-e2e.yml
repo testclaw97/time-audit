@@ -68,7 +68,10 @@ jobs:
             adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 || true
             sleep 8
             adb exec-out screencap -p > shots/00-launch.png
-            # Drive the popup flow (screenshots land in the CWD as <name>.png).
+            # FULL human-style tour first (fresh install → onboarding + every screen).
+            maestro test .maestro/full-tour.yaml --format junit --output shots/tour-report.xml || true
+            cp ./*.png shots/ 2>/dev/null || true
+            # Then the focused overlay proof (press Home → chooser stays on top).
             maestro test .maestro/popup.yaml --format junit --output shots/popup-report.xml || true
             cp ./*.png shots/ 2>/dev/null || true
             cp -r "$HOME/.maestro/tests" shots/maestro-logs 2>/dev/null || true
