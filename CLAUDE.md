@@ -69,10 +69,11 @@ src/ui/                     Card, Button, PressableScale, FadeIn, QuickEntry, Ti
   Android build/emulator — do not claim they work from the web build.
 - **`countScheduled()` returns 0 on web**, so Settings shows "0 check-ins queued" in the web
   preview. That is expected — on device it reflects the real AlarmManager queue.
-- **Device reboot clears the OS notification queue** until the app is next opened (no
-  backend, no boot receiver wired to JS). Opening the app re-arms via the foreground
-  reschedule. This is the known trade-off of the local-only design — stated honestly in the
-  Settings "How pings work" note.
+- **Device reboot clears the OS alarm/notification queue.** On **Android** the native
+  `BootReceiver` re-arms the ping chain from the persisted params (fixes this) — but only if
+  battery optimization lets it run at boot. On **web/iOS** (expo fallback) there is no boot
+  receiver, so the queue stays empty until the app is next opened and the foreground reschedule
+  runs. Local-only design trade-off — stated honestly in the Settings "How pings work" note.
 - **AsyncStorage web backend keys are un-prefixed** (`ta:settings:v1`, `ta:entries:v1` land
   directly in `localStorage`) — handy for seeding demo data, but don't assume a prefix.
 - **Direct-reply save path == in-app QuickEntry save path** (both call `store.logEntry`).
