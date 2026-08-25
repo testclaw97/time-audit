@@ -60,6 +60,7 @@ object PingStore {
     const val EXTRA_WAKE = "wakeMin"           // Int minute-of-day the awake window opens
     const val EXTRA_SLEEP = "sleepMin"         // Int minute-of-day the awake window closes
     const val EXTRA_CATEGORY = "picked_category" // String category id for ACTION_PICK
+    const val EXTRA_TEST = "test_ping"           // Boolean: a "Test the popup" fire (ignore pause, don't chain)
 
     // requestCode scheme for the alarm PendingIntents. A PendingIntent's identity ignores
     // its extras, so DISTINCT request codes per boundary are what keep the scheduled alarms
@@ -68,6 +69,7 @@ object PingStore {
     const val REQ_ALARM_BASE = 47000
     const val ALARM_CAP = 60                       // hard cap on the initial batch (spec)
     const val REQ_CHAIN = REQ_ALARM_BASE + ALARM_CAP // 47060
+    const val REQ_TEST = REQ_CHAIN + 1               // 47061 — one-shot "Test the popup" alarm
 
     // --- SharedPreferences plumbing ----------------------------------------------------
     private const val PREFS = "time_ping"
