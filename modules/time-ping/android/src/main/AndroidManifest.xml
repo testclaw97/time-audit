@@ -28,6 +28,15 @@
     -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"
         tools:ignore="ProtectedPermissions" />
+    <!--
+      SYSTEM_ALERT_WINDOW ("Display over other apps") — the reliable way to make the chooser
+      cover the WHOLE screen while the phone is unlocked/in use. A full-screen INTENT only
+      launches its activity when the device is locked/asleep (and on Android 14+ degrades to a
+      heads-up without the FSI special access); this permission additionally lifts the
+      background-activity-launch restriction so PingReceiver can start PingActivity directly.
+      Settings-granted ("Display over other apps"), same as Mr. Productive's block screen.
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

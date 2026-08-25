@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 
@@ -107,6 +108,24 @@ class PingReceiver : BroadcastReceiver() {
                 // On Android 13+ this silently no-ops without POST_NOTIFICATIONS, which is the
                 // correct degrade (the app requests that permission in onboarding).
                 NotificationManagerCompat.from(ctx).notify(PingStore.NOTIF_ID, builder.build())
+
+                // Belt-and-suspenders for the "screen is ON / phone in active use" case. A full-
+                // screen INTENT only reliably launches its activity when the device is locked or
+                // asleep; while the user is actively using the phone Android keeps it as a heads-up
+                // (and on Android 14+ it degrades to a heads-up entirely unless the FSI special
+                // access is granted). If the user has granted "Display over other apps"
+                // (SYSTEM_ALERT_WINDOW), that permission ALSO lifts the background-activity-launch
+                // restriction — so we can start PingActivity DIRECTLY and it covers the WHOLE screen
+                // every time, unlocked or not. Without the permission this is a no-op (a background
+                // activity start is blocked) and the FSI notification above stays the mechanism.
+                // PingActivity is singleTask, so a direct launch + the FSI can never stack two
+                // choosers. This is the same overlay-backed launch Mr. Productive's block screen uses.
+                try {
+                    if (Settings.canDrawOverlays(ctx)) {
+                        ctx.startActivity(activityIntent)
+                    }
+                } catch (_: Throwable) {
+                }
             } catch (_: Throwable) {
                 // Best-effort: a failed ping must not take anything else down.
             }

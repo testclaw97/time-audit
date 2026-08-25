@@ -136,6 +136,29 @@ class TimePingModule : Module() {
             }
         }
 
+        // "Display over other apps" (SYSTEM_ALERT_WINDOW). This is the key grant for showing the
+        // FULL-SCREEN chooser while the phone is unlocked/in use: it lets PingReceiver start
+        // PingActivity from the background (see PingReceiver.fire). Settings-granted, no runtime dialog.
+        AsyncFunction("hasOverlayPermission") {
+            try {
+                Settings.canDrawOverlays(context)
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
+        AsyncFunction("requestOverlayPermission") {
+            try {
+                launchSettings(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:${context.packageName}")
+                    )
+                )
+            } catch (_: Throwable) {
+            }
+        }
+
         AsyncFunction("hasBatteryExemption") {
             try {
                 val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager

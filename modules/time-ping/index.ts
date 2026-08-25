@@ -81,6 +81,11 @@ export interface TimePingModule {
   hasFullScreenIntent(): Promise<boolean>;
   /** Open ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT (Android 14+); no-op on older OSes. */
   requestFullScreenIntent(): Promise<void>;
+  /** "Display over other apps" (SYSTEM_ALERT_WINDOW) — the key grant for a full-screen chooser
+   *  while the phone is unlocked/in use (lets the ping launch PingActivity from the background). */
+  hasOverlayPermission(): Promise<boolean>;
+  /** Open ACTION_MANAGE_OVERLAY_PERMISSION for our package. */
+  requestOverlayPermission(): Promise<void>;
   /** PowerManager.isIgnoringBatteryOptimizations() for our package. */
   hasBatteryExemption(): Promise<boolean>;
   /** Open ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS for our package. */

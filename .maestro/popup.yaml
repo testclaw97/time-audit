@@ -29,6 +29,14 @@ appId: agency.lumieremedia.timeaudit
       visible: "Allow"
     commands:
       - tapOn: "Allow"
+# Onboarding may show a 2nd "Let the popup cover your screen" step when the overlay permission
+# isn't granted. In CI overlay is pre-granted (appops) so this is usually skipped; if it appears,
+# finish via "Skip for now" (never tap "Allow full-screen popup" — that opens external Settings).
+- runFlow:
+    when:
+      visible: "Skip for now.*"
+    commands:
+      - tapOn: "Skip for now.*"
 # Landed in the app — the bottom tab bar (Today · Insights · Settings) is now present.
 - extendedWaitUntil:
     visible: "Insights"

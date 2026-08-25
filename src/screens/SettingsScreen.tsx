@@ -51,7 +51,7 @@ type EditorState =
   | { mode: "add" | "edit"; id?: string; label: string; emoji: string; color: string }
   | null;
 
-type Perms = { exact: boolean; fsi: boolean; battery: boolean };
+type Perms = { overlay: boolean; exact: boolean; fsi: boolean; battery: boolean };
 
 export default function SettingsScreen({ onReset }: { onReset: () => void }) {
   const insets = useSafeAreaInsets();
@@ -59,7 +59,7 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
   const [scheduled, setScheduled] = useState<number | null>(null);
   const [armed, setArmed] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
-  const [perms, setPerms] = useState<Perms>({ exact: true, fsi: true, battery: true });
+  const [perms, setPerms] = useState<Perms>({ overlay: true, exact: true, fsi: true, battery: true });
 
   const native = isAvailable();
 
@@ -73,12 +73,13 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
   const refreshPerms = useCallback(async () => {
     if (!isAvailable() || !TimePing) return;
     try {
-      const [exact, fsi, battery] = await Promise.all([
+      const [overlay, exact, fsi, battery] = await Promise.all([
+        TimePing.hasOverlayPermission(),
         TimePing.hasExactAlarm(),
         TimePing.hasFullScreenIntent(),
         TimePing.hasBatteryExemption(),
       ]);
-      setPerms({ exact, fsi, battery });
+      setPerms({ overlay, exact, fsi, battery });
     } catch (e) {
       console.warn("[settings] refreshPerms failed", e);
     }
@@ -183,10 +184,11 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
     }
   };
 
-  const request = async (which: "exact" | "fsi" | "battery") => {
+  const request = async (which: "overlay" | "exact" | "fsi" | "battery") => {
     if (!isAvailable() || !TimePing) return;
     try {
-      if (which === "exact") await TimePing.requestExactAlarm();
+      if (which === "overlay") await TimePing.requestOverlayPermission();
+      else if (which === "exact") await TimePing.requestExactAlarm();
       else if (which === "fsi") await TimePing.requestFullScreenIntent();
       else await TimePing.requestBatteryExemption();
     } catch (e) {
@@ -316,6 +318,13 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
         {native ? (
           <Card style={styles.permCard}>
             <PermissionRow
+              title="Show over other apps"
+              desc="Required for the popup to cover your screen."
+              granted={perms.overlay}
+              onAllow={() => request("overlay")}
+            />
+            <View style={styles.divider} />
+            <PermissionRow
               title="Exact alarms"
               granted={perms.exact}
               onAllow={() => request("exact")}
@@ -440,10 +449,12 @@ function IconBtn({
 
 function PermissionRow({
   title,
+  desc,
   granted,
   onAllow,
 }: {
   title: string;
+  desc?: string;
   granted: boolean;
   onAllow: () => void;
 }) {
@@ -451,6 +462,7 @@ function PermissionRow({
     <View style={styles.rowBetween}>
       <View style={styles.rowText}>
         <Text style={[type.bodyStrong, styles.rowTitle]}>{title}</Text>
+        {desc ? <Text style={[type.caption, styles.permDesc]}>{desc}</Text> : null}
         <Text style={[type.caption, granted ? styles.permOk : styles.permNeed]}>
           {granted ? "Granted" : "Needed"}
         </Text>
@@ -625,6 +637,7 @@ const styles = StyleSheet.create({
 
   // permissions
   permCard: { marginTop: space.s1, gap: space.s0 },
+  permDesc: { color: colors.muted, marginTop: 2 },
   permOk: { color: colors.teal, marginTop: 2 },
   permNeed: { color: colors.accent, marginTop: 2 },
   permCheck: { color: colors.teal, fontSize: 18, fontWeight: "800" },
