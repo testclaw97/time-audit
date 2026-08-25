@@ -124,7 +124,25 @@ object PingScheduler {
         val stepMs = (if (interval in 1..1440) interval else PingStore.DEFAULT_INTERVAL) * 60_000L
         val now = System.currentTimeMillis()
         val slotStart = (now / stepMs) * stepMs
-        PingReceiver.fire(ctx, slotStart, ignorePause = true)
+        // Fire ~4s out through the REAL AlarmManager → PingReceiver path (not a direct call), so
+        // "Test the popup" exercises exactly what a genuine BACKGROUND ping does — including the
+        // lock-screen route. Tap it, lock the phone, and the popup lands over the lock screen
+        // (proving the locked path end-to-end, which a direct foreground call never could).
+        val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+        if (am == null) {
+            PingReceiver.fire(ctx, slotStart, ignorePause = true) // no AlarmManager → immediate fallback
+            return
+        }
+        val intent = buildFireIntent(ctx, slotStart, interval, PingStore.getWake(ctx), PingStore.getSleep(ctx))
+            .apply { putExtra(PingStore.EXTRA_TEST, true) }
+        val pi = broadcastPI(ctx, PingStore.REQ_TEST, intent)
+        val fireAt = now + 4_000L
+        try {
+            if (canExact(am)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
+            else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
+        } catch (_: SecurityException) {
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireAt, pi)
+        }
     }
 
     // --- helpers -----------------------------------------------------------------------

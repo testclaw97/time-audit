@@ -34,12 +34,17 @@ class PingReceiver : BroadcastReceiver() {
             when (intent.action) {
                 PingStore.ACTION_FIRE -> {
                     val slotStart = intent.getLongExtra(PingStore.EXTRA_SLOT_START, 0L)
-                    fire(context, slotStart)
-                    // Chain the next boundary so the queue never runs dry, even if the app
-                    // process is dead and JS never reschedules.
-                    try {
-                        PingScheduler.scheduleNext(context)
-                    } catch (_: Throwable) {
+                    // A "Test the popup" fire ignores an active snooze and must NOT perturb the
+                    // real cadence (it's a one-shot alarm, so it also never needs to chain).
+                    val isTest = intent.getBooleanExtra(PingStore.EXTRA_TEST, false)
+                    fire(context, slotStart, ignorePause = isTest)
+                    if (!isTest) {
+                        // Chain the next boundary so the queue never runs dry, even if the app
+                        // process is dead and JS never reschedules.
+                        try {
+                            PingScheduler.scheduleNext(context)
+                        } catch (_: Throwable) {
+                        }
                     }
                 }
 

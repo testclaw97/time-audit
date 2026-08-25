@@ -214,9 +214,15 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
   };
 
   // ---- popup actions ----
+  // "Test the popup" now fires through the REAL alarm path ~4s later, so you can lock the phone
+  // and confirm the popup shows over the lock screen. Confirm inline so the delay isn't confusing.
   const testPopup = () => {
     if (isAvailable() && TimePing) {
       TimePing.triggerTestPing().catch((e) => console.warn("[settings] triggerTestPing", e));
+      Alert.alert(
+        "Popup coming in ~4s",
+        "Lock your phone now to test the lock-screen popup.",
+      );
     } else {
       Alert.alert(
         "Only in the installed app",
@@ -415,6 +421,9 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
       <FadeIn delay={220}>
         <Text style={[type.label, styles.sectionLabel]}>THE POPUP</Text>
         <Button label="Test the popup" icon="⚡" onPress={testPopup} testID="test-popup" />
+        <Text style={styles.hint}>
+          Fires in a few seconds — lock your phone now to test the lock-screen popup.
+        </Text>
         {native ? (
           <Card style={styles.permCard}>
             <PermissionRow

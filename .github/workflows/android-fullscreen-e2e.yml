@@ -74,6 +74,19 @@ jobs:
             # Then the focused overlay proof (press Home → chooser stays on top).
             maestro test .maestro/popup.yaml --format junit --output shots/popup-report.xml || true
             cp ./*.png shots/ 2>/dev/null || true
+            # ---- LOCK-SCREEN popup test ----
+            # Prove the popup lands OVER the lock screen. Set a real secure lock, drive Settings →
+            # "Test the popup" (arms a ~4s real alarm), lock the screen, and wait for it to fire.
+            adb shell "locksettings set-pin 1234" || true
+            maestro test .maestro/lockscreen-trigger.yaml --format junit --output shots/lockscreen-report.xml || true
+            cp ./*.png shots/ 2>/dev/null || true
+            adb shell input keyevent 26   # screen OFF → the keyguard engages
+            sleep 9                        # let the ~4s alarm fire over the lock screen
+            adb exec-out screencap -p > shots/L1-lockscreen-popup.png
+            # Reliable non-visual proof: did PingActivity actually launch (resume) over the keyguard?
+            echo "=== resumed activity / PingActivity over keyguard ===" | tee shots/lockscreen.txt
+            adb shell "dumpsys activity activities" 2>&1 | grep -iE "ResumedActivity|PingActivity|timeaudit" | head -20 | tee -a shots/lockscreen.txt || true
+            adb shell "dumpsys window" 2>&1 | grep -iE "PingActivity|mCurrentFocus|keyguardShowing|Occluded" | head -20 | tee -a shots/lockscreen.txt || true
             cp -r "$HOME/.maestro/tests" shots/maestro-logs 2>/dev/null || true
             adb exec-out screencap -p > shots/99-final.png
             # Proof the screen-off firing mechanism is armed: exact alarms queued in AlarmManager.

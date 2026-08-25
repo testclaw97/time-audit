@@ -1,0 +1,33 @@
+# Lock-screen popup test — Maestro half: onboard if needed, go to Settings, and tap
+# "Test the popup" (which now arms a real alarm ~4s out). The workflow then LOCKS the screen
+# and waits for that alarm to fire over the keyguard, screenshotting + dumpsys-checking that
+# PingActivity actually launched over the lock screen. This is how we prove the locked path.
+appId: agency.lumieremedia.timeaudit
+---
+- launchApp
+# Complete onboarding if this runs on a fresh install (optional — skipped when already onboarded).
+- scrollUntilVisible:
+    element: { text: "Start my audit.*" }
+    direction: DOWN
+    timeout: 15000
+    optional: true
+- tapOn: { text: "Start my audit.*", optional: true }
+- runFlow:
+    when: { visible: "Allow" }
+    commands: [ { tapOn: "Allow" } ]
+- runFlow:
+    when: { visible: "Skip for now.*" }
+    commands: [ { tapOn: "Skip for now.*" } ]
+# Into Settings, scroll to and fire the delayed test popup.
+- tapOn: { text: "Settings", optional: true }
+- scrollUntilVisible:
+    element: { text: "Test the popup.*" }
+    direction: DOWN
+    timeout: 20000
+    optional: true
+- tapOn: "Test the popup.*"
+# Dismiss any confirmation so it doesn't hold focus; the alarm is already armed.
+- runFlow:
+    when: { visible: "OK" }
+    commands: [ { tapOn: "OK" } ]
+- takeScreenshot: L0-test-armed
