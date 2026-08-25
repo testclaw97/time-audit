@@ -25,10 +25,13 @@ import TodayScreen from "./src/screens/TodayScreen";
 import InsightsScreen from "./src/screens/InsightsScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import {
+  drainPendingLogs,
   getState,
   hydrate,
   logEntry,
+  syncCategoriesToNative,
   useStore,
+  type Settings,
 } from "./src/lib/store";
 import {
   installNotificationHandler,
@@ -36,8 +39,44 @@ import {
   reschedulePings,
   setupNotificationChannels,
 } from "./src/lib/notifications";
+// The native full-screen category chooser (Android only). `isAvailable()` is false on web/iOS
+// where `TimePing` is null, so every native call is guarded on it (see armPings below).
+import TimePing, { isAvailable } from "./modules/time-ping";
 
 installNotificationHandler();
+
+// Arm (or disarm) the pings for the current settings — the SINGLE source of ping truth,
+// called on cold start, on foreground, and whenever the ping settings change.
+//
+// On Android the NATIVE full-screen chooser owns pings: sync the category set, drain any slots
+// the chooser logged while the app was away, then schedule (tracking on) or cancel (tracking
+// off). On web/iOS the native module is absent, so we fall back to the expo-notifications
+// scheduler. We branch on `isAvailable()` and run EXACTLY ONE path — never both — so Android
+// can't fire the native chooser AND an expo-notification ping for the same slot (double popup).
+// All native calls are guarded + try/caught so web/iOS can never crash here.
+async function armPings(s: Settings): Promise<void> {
+  if (isAvailable() && TimePing) {
+    try {
+      await syncCategoriesToNative();
+      await drainPendingLogs();
+      if (s.tracking) {
+        await TimePing.schedule({
+          intervalMinutes: s.intervalMinutes,
+          wakeMinutes: s.wakeMinutes,
+          sleepMinutes: s.sleepMinutes,
+        });
+      } else {
+        await TimePing.cancelAll();
+      }
+    } catch (e) {
+      console.warn("[app] native ping arm failed", e);
+    }
+    return;
+  }
+  // web / iOS: expo-notifications fallback. reschedulePings cancels first and no-ops when
+  // tracking is off, so it's safe (and idempotent) to call unconditionally.
+  await reschedulePings(s);
+}
 
 type Tab = "today" | "insights" | "settings";
 
@@ -54,13 +93,13 @@ function Root() {
   const [focusSlot, setFocusSlot] = useState<number | null>(null);
   const seededRef = useRef(false);
 
-  // Bootstrap once.
+  // Bootstrap once: load state, set up notification channels, then arm the pings via the
+  // native-first path (armPings picks native chooser vs expo-notifications by isAvailable()).
   useEffect(() => {
     (async () => {
       await hydrate();
       await setupNotificationChannels();
-      const s = getState().settings;
-      if (s.tracking) await reschedulePings(s);
+      await armPings(getState().settings);
     })();
   }, []);
 
@@ -96,17 +135,32 @@ function Root() {
     return () => sub?.remove();
   }, [handleResponse]);
 
-  // Reschedule the rolling window whenever the app comes to the foreground.
+  // On foreground: drain anything the native chooser logged while away and re-arm the rolling
+  // window. armPings handles the native (drain + schedule/cancel) vs expo (reschedule) branch.
   useEffect(() => {
     const onChange = (next: AppStateStatus) => {
-      if (next === "active") {
-        const s = getState().settings;
-        if (s.tracking) reschedulePings(s);
-      }
+      if (next === "active") void armPings(getState().settings);
     };
     const sub = AppState.addEventListener("change", onChange);
     return () => sub.remove();
   }, []);
+
+  // Re-arm whenever the ping settings change (interval / awake window / tracking toggle).
+  // Deps are the raw values from useStore() so the effect fires on any of them. armPings is
+  // idempotent (native schedule cancels+reschedules, cancelAll off; expo reschedulePings the
+  // same), so a redundant run is harmless. Gated on `ready` so we don't arm the DEFAULT_SETTINGS
+  // before hydrate has loaded the persisted ones.
+  useEffect(() => {
+    if (!ready) return;
+    void armPings(settings);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    ready,
+    settings.intervalMinutes,
+    settings.wakeMinutes,
+    settings.sleepMinutes,
+    settings.tracking,
+  ]);
 
   if (!ready) {
     return (

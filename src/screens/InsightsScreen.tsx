@@ -9,23 +9,77 @@ import Card from "../ui/Card";
 import FadeIn from "../ui/FadeIn";
 import PressableScale from "../ui/PressableScale";
 import { useStore } from "../lib/store";
-import { computeBreakdown, todayKeys, weekKeys } from "../lib/insights";
-import { formatDuration } from "../lib/time";
+import { todayKeys, weekKeys } from "../lib/insights";
+import {
+  displayLabel,
+  formatDuration,
+  getSlotMinutes,
+  normalizeLabel,
+} from "../lib/time";
 
 type Range = "today" | "week";
+
+/** One ranked row in the breakdown. Category entries carry the category's color + emoji;
+ *  uncategorized (custom/legacy) entries group by normalized text and get a neutral color. */
+interface CatGroup {
+  key: string;
+  label: string;
+  emoji?: string;
+  color: string;
+  count: number;
+  minutes: number;
+}
 
 export default function InsightsScreen() {
   const insets = useSafeAreaInsets();
   const { settings, entries } = useStore();
   const [range, setRange] = useState<Range>("today");
 
+  // Group by Category.id when present (color/emoji/label from settings.categories), else by
+  // normalized text. Durations use the CONFIGURED interval — never a hardcoded 15.
   const breakdown = useMemo(() => {
     const keys =
       range === "today"
         ? todayKeys(settings.wakeMinutes, settings.sleepMinutes)
         : weekKeys(settings.wakeMinutes, settings.sleepMinutes);
-    return computeBreakdown(entries, keys);
-  }, [entries, range, settings.wakeMinutes, settings.sleepMinutes]);
+    const slotMin = getSlotMinutes();
+    const catById = new Map(settings.categories.map((c) => [c.id, c] as const));
+    const map = new Map<string, CatGroup>();
+    let logged = 0;
+
+    for (const slot of keys) {
+      const e = entries[String(slot)];
+      if (!e || e.text.trim().length === 0) continue;
+      logged++;
+      const cat = e.category ? catById.get(e.category) : undefined;
+      let g: CatGroup | undefined;
+      if (cat) {
+        const key = `cat:${cat.id}`;
+        g = map.get(key) ?? { key, label: cat.label, emoji: cat.emoji, color: cat.color, count: 0, minutes: 0 };
+      } else {
+        const norm = normalizeLabel(e.text);
+        const key = `txt:${norm}`;
+        g = map.get(key) ?? { key, label: displayLabel(norm), color: colors.muted, count: 0, minutes: 0 };
+      }
+      g.count++;
+      g.minutes = g.count * slotMin;
+      map.set(g.key, g);
+    }
+
+    const groups = [...map.values()].sort(
+      (a, b) => b.count - a.count || a.label.localeCompare(b.label),
+    );
+    const totalSlots = keys.length;
+    const unloggedSlots = totalSlots - logged;
+    return {
+      groups,
+      totalSlots,
+      loggedSlots: logged,
+      unloggedSlots,
+      loggedMinutes: logged * slotMin,
+      unloggedMinutes: unloggedSlots * slotMin,
+    };
+  }, [entries, range, settings.wakeMinutes, settings.sleepMinutes, settings.categories]);
 
   const maxCount = breakdown.groups.reduce((m, g) => Math.max(m, g.count), 0) || 1;
   const loggedPct =
@@ -87,11 +141,12 @@ export default function InsightsScreen() {
           </Card>
         ) : (
           <View style={styles.list}>
-            {breakdown.groups.map((g, i) => (
-              <View key={g.label} style={styles.barRow}>
+            {breakdown.groups.map((g) => (
+              <View key={g.key} style={styles.barRow}>
                 <View style={styles.barHeader}>
                   <Text style={[type.bodyStrong, styles.barLabel]} numberOfLines={1}>
-                    {g.display}
+                    {g.emoji ? `${g.emoji}  ` : ""}
+                    {g.label}
                   </Text>
                   <Text style={styles.barValue}>
                     {g.count} {g.count === 1 ? "slot" : "slots"} · {formatDuration(g.minutes)}
@@ -103,7 +158,7 @@ export default function InsightsScreen() {
                       styles.barFill,
                       {
                         width: `${Math.max(6, (g.count / maxCount) * 100)}%`,
-                        backgroundColor: i === 0 ? colors.accent : colors.teal,
+                        backgroundColor: g.color,
                       },
                     ]}
                   />

@@ -8,6 +8,7 @@ name: Android E2E (emulator)
 on:
   workflow_dispatch: {}
   push:
+    branches: [master, main]  # avoid spurious runs on feature branches (this job needs a published release)
     paths:
       - ".maestro/**"
       - ".github/workflows/android-e2e.yml"

@@ -1,0 +1,90 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Permissions for the full-screen category ping. This manifest is MERGED into the host
+      app's manifest at build time, so the permission set stays co-located with the code
+      that needs it. Justifications (also required for the Play data-safety form):
+
+      · USE_FULL_SCREEN_INTENT — post a notification whose `setFullScreenIntent` launches
+          PingActivity OVER the lock screen / when the screen is off. This is the whole
+          point of the app (one-tap logging from the lock screen). On Android 14+ it is a
+          "special access" permission: the mere declaration only allows the request; the
+          user must additionally grant it in Settings (canUseFullScreenIntent). tools:ignore
+          silences the lint note that it can't be a normal runtime request.
+      · SCHEDULE_EXACT_ALARM — pings must land ON the slot boundary (:00/:15/…), not "some
+          time in the next batching window". Only setExact* honours that. Also a special
+          access on Android 12+ (canScheduleExactAlarms); we degrade to inexact
+          setAndAllowWhileIdle when it isn't granted so pings still fire, just less punctually.
+      · POST_NOTIFICATIONS — the full-screen intent is delivered THROUGH a notification, and
+          Android 13+ requires runtime consent before any notification (incl. the FSI one)
+          can be posted. Without it the chooser can't be surfaced.
+      · RECEIVE_BOOT_COMPLETED — AlarmManager's queue is wiped on reboot. BootReceiver
+          re-arms the pings from the persisted params so a restart doesn't silently stop the
+          audit (fixes the known reboot landmine).
+      · REQUEST_IGNORE_BATTERY_OPTIMIZATIONS — Doze / aggressive OEM battery managers can
+          defer even setExactAndAllowWhileIdle alarms. Letting the user exempt the app keeps
+          the cadence reliable on the phones (Xiaomi/Samsung/etc.) that need it most.
+    -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
+
+    <application>
+        <!--
+          The full-screen chooser. Launched by the FSI notification (and by the
+          fullScreenIntent PendingIntent) so it appears over everything, including the lock
+          screen with the screen off.
+            · exported=false        — only our own notification / broadcast may start it.
+            · excludeFromRecents     — a transient popup shouldn't linger in the recents list.
+            · launchMode=singleTask  — a second ping while one is up reuses the instance
+                                       instead of stacking chooser on chooser.
+            · Translucent.NoTitleBar theme — the activity paints its own dark full-bleed
+                                       surface (built in Kotlin, no res/); the translucent
+                                       system theme avoids a white flash before onCreate draws.
+          showWhenLocked / turnScreenOn are set in code (setShowWhenLocked/setTurnScreenOn on
+          API 27+, window flags below that) for the widest API compatibility rather than via
+          the manifest-only android:showWhenLocked attribute.
+        -->
+        <activity
+            android:name="agency.lumieremedia.timeaudit.timeping.PingActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:showOnLockScreen="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            tools:ignore="LockedOrientationActivity" />
+
+        <!--
+          Receives the AlarmManager broadcast (ACTION_FIRE) to post the FSI notification and
+          chain the next alarm, and the notification's quick-action broadcasts (ACTION_PICK)
+          to record a PendingLog without opening the chooser. exported=false: only our own
+          explicit intents (alarms + our own notification actions) target it.
+        -->
+        <receiver
+            android:name="agency.lumieremedia.timeaudit.timeping.PingReceiver"
+            android:exported="false" />
+
+        <!--
+          Re-arms the ping schedule after a reboot from the params persisted in PingStore.
+          exported=true is REQUIRED for the system to deliver BOOT_COMPLETED to us. We also
+          catch the OEM "quickboot"/HTC poweron aliases some devices send instead.
+        -->
+        <receiver
+            android:name="agency.lumieremedia.timeaudit.timeping.BootReceiver"
+            android:exported="true"
+            android:enabled="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

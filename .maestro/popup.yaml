@@ -1,0 +1,62 @@
+# Full-screen category popup — the real proof.
+# Onboard → Settings → "Test the popup" → the NATIVE PingActivity chooser must appear over the
+# app → tap a category chip → the slot gets logged (drained on foreground) and shows on Today.
+# The over-the-lock-screen / screen-off delivery uses the same setShowWhenLocked + FSI mechanism
+# and is proven separately by the dumpsys alarm queue (see the workflow) — CI can't wait out a
+# real 15-min screen-off ping, but "Test the popup" launches the identical chooser Activity.
+#
+# NOTE: onboarding + Settings are long scroll views, so every action below scrolls its target
+# into the viewport first — a conditional `when: visible` would silently skip a below-the-fold
+# button (that exact mistake left the app stuck on onboarding in the first run).
+appId: agency.lumieremedia.timeaudit
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "actually go.*"
+    timeout: 60000
+    optional: true
+- takeScreenshot: 01-onboarding
+# Complete onboarding — the "Start my audit" CTA is below the fold; scroll to it, then tap.
+- scrollUntilVisible:
+    element:
+      text: "Start my audit.*"
+    direction: DOWN
+    timeout: 20000
+- tapOn: "Start my audit.*"
+# POST_NOTIFICATIONS prompt (pre-granted in CI; tap through if it still appears).
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+# Landed in the app — the bottom tab bar (Today · Insights · Settings) is now present.
+- extendedWaitUntil:
+    visible: "Insights"
+    timeout: 20000
+- takeScreenshot: 02-today
+# Into Settings, scroll to the "Test the popup" button, fire it.
+- tapOn: "Settings"
+- scrollUntilVisible:
+    element:
+      text: "Test the popup.*"
+    direction: DOWN
+    timeout: 20000
+- takeScreenshot: 03-settings
+- tapOn: "Test the popup.*"
+# THE PROOF: the native full-screen chooser Activity appears over the app. Hard assert.
+- extendedWaitUntil:
+    visible: "What are you doing right now.*"
+    timeout: 15000
+- takeScreenshot: 04-POPUP-chooser
+# One-tap log: pick the "Work" category chip. Chooser records a PendingLog and finishes.
+- tapOn: "Work"
+- takeScreenshot: 05-after-pick
+# Back in the app; the foreground drain replays the pick into the log. Confirm on Today.
+- tapOn:
+    text: "Today"
+    optional: true
+- extendedWaitUntil:
+    visible: "Work"
+    timeout: 15000
+    optional: true
+- takeScreenshot: 06-today-logged
