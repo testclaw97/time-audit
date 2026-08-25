@@ -23,9 +23,11 @@ import type { Category } from "../lib/store";
 import {
   addCategory,
   clearAllData,
+  pausePopups,
   removeCategory,
   reorderCategories,
   resetCategories,
+  resumePopups,
   updateCategory,
   updateSettings,
   useStore,
@@ -38,9 +40,24 @@ import {
   reschedulePings,
   setupNotificationChannels,
 } from "../lib/notifications";
-import { formatDuration } from "../lib/time";
+import { formatClock, formatDuration } from "../lib/time";
 
 const INTERVALS = [5, 10, 15, 20, 30, 45, 60] as const;
+// Snooze presets for the "Pause popups" control (matches the Home screen).
+const SNOOZE_PRESETS = [
+  { label: "30 min", ms: 30 * 60 * 1000 },
+  { label: "1 hour", ms: 60 * 60 * 1000 },
+  { label: "2 hours", ms: 2 * 60 * 60 * 1000 },
+] as const;
+
+/** Milliseconds until the next local wake boundary (today if still ahead, else tomorrow). */
+function msUntilNextWake(wakeMinutes: number): number {
+  const now = new Date();
+  const wake = new Date(now);
+  wake.setHours(Math.floor(wakeMinutes / 60), wakeMinutes % 60, 0, 0);
+  if (wake.getTime() <= now.getTime()) wake.setDate(wake.getDate() + 1);
+  return wake.getTime() - now.getTime();
+}
 // Preset color palette for the category editor (mirrors the default category hues).
 const SWATCHES = [
   "#f5a623", "#ffb84d", "#ff5d6c", "#38c8b0", "#7bd88f",
@@ -60,8 +77,32 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
   const [armed, setArmed] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [perms, setPerms] = useState<Perms>({ overlay: true, exact: true, fsi: true, battery: true });
+  const [showSnooze, setShowSnooze] = useState(false);
+  // 1s heartbeat while paused so the "paused until …" line stays fresh and the control flips
+  // back to "Pause popups" the moment the snooze expires.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const paused = settings.pausedUntil > nowMs;
 
   const native = isAvailable();
+
+  useEffect(() => {
+    if (settings.pausedUntil <= Date.now()) {
+      setNowMs(Date.now());
+      return;
+    }
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [settings.pausedUntil]);
+
+  const snooze = (ms: number) => {
+    void pausePopups(ms);
+    setShowSnooze(false);
+  };
+  const resumeSnooze = () => {
+    void resumePopups();
+    setShowSnooze(false);
+  };
 
   const refreshScheduled = async () => setScheduled(await countScheduled());
   useEffect(() => {
@@ -229,6 +270,65 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
             <Toggle value={settings.tracking} onToggle={toggleTracking} />
           </View>
         </Card>
+      </FadeIn>
+
+      <FadeIn delay={95}>
+        <Text style={[type.label, styles.sectionLabel]}>PAUSE POPUPS</Text>
+        {paused ? (
+          <Card tone="accent" style={styles.snoozePaused}>
+            <View style={styles.rowText}>
+              <Text style={[type.bodyStrong, styles.snoozePausedTitle]} numberOfLines={1}>
+                🔕 Paused until {formatClock(settings.pausedUntil)}
+              </Text>
+              <Text style={[type.caption, styles.rowSub]}>
+                No check-ins will pop up until then.
+              </Text>
+            </View>
+            <PressableScale
+              onPress={resumeSnooze}
+              accessibilityLabel="Resume popups now"
+              style={styles.resumeBtn}
+            >
+              <Text style={styles.resumeText}>Resume</Text>
+            </PressableScale>
+          </Card>
+        ) : (
+          <>
+            <PressableScale
+              onPress={() => setShowSnooze((v) => !v)}
+              accessibilityLabel="Pause popups"
+              style={styles.snoozeRow}
+              scaleTo={0.99}
+            >
+              <Text style={[type.bodyStrong, styles.snoozeRowText]}>🔕 Pause popups</Text>
+              <Text style={styles.snoozeChevron}>{showSnooze ? "▴" : "▾"}</Text>
+            </PressableScale>
+            {showSnooze ? (
+              <View style={styles.snoozeOptions}>
+                {SNOOZE_PRESETS.map((p) => (
+                  <PressableScale
+                    key={p.label}
+                    onPress={() => snooze(p.ms)}
+                    accessibilityLabel={`Pause popups for ${p.label}`}
+                    style={styles.snoozeChip}
+                    scaleTo={0.94}
+                  >
+                    <Text style={styles.snoozeChipText}>{p.label}</Text>
+                  </PressableScale>
+                ))}
+                <PressableScale
+                  onPress={() => snooze(msUntilNextWake(settings.wakeMinutes))}
+                  accessibilityLabel="Pause popups until tomorrow"
+                  style={styles.snoozeChip}
+                  scaleTo={0.94}
+                >
+                  <Text style={styles.snoozeChipText}>Until tomorrow</Text>
+                </PressableScale>
+              </View>
+            ) : null}
+          </>
+        )}
+        <Text style={styles.hint}>Silence the check-in popups for a while without turning tracking off.</Text>
       </FadeIn>
 
       <FadeIn delay={120}>
@@ -573,6 +673,45 @@ const styles = StyleSheet.create({
   hint: { ...type.caption, color: colors.muted, marginTop: space.s1 },
   note: { color: colors.fg2, lineHeight: 20 },
   version: { ...type.caption, color: colors.faint, textAlign: "center", marginTop: space.s4 },
+
+  // pause popups (snooze)
+  snoozeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.surface2,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1 + 4,
+  },
+  snoozeRowText: { color: colors.fg2 },
+  snoozeChevron: { color: colors.muted, fontSize: 14, fontWeight: "800" },
+  snoozeOptions: { flexDirection: "row", flexWrap: "wrap", gap: space.s1, marginTop: space.s1 },
+  snoozeChip: {
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+  },
+  snoozeChipText: { color: colors.fg2, fontWeight: "700", fontSize: 14 },
+  snoozePaused: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: space.s2,
+  },
+  snoozePausedTitle: { color: colors.accent2 },
+  resumeBtn: {
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
+  },
+  resumeText: { color: colors.onAccent, fontWeight: "800", fontSize: 14 },
 
   // interval chips
   chips: { flexDirection: "row", flexWrap: "wrap", gap: space.s1 },

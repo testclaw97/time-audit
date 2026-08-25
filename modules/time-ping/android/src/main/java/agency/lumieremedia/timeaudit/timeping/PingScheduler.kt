@@ -27,14 +27,14 @@ object PingScheduler {
      * [intervalMin], and arm an exact alarm on each (capped at [PingStore.ALARM_CAP]). Persists
      * the params for the chain + boot restore. Returns the number of alarms scheduled.
      */
-    fun schedule(ctx: Context, intervalMin: Int, wakeMin: Int, sleepMin: Int): Int {
+    fun schedule(ctx: Context, intervalMin: Int, wakeMin: Int, sleepMin: Int, pausedUntilMs: Long = 0L): Int {
         // Clamp the interval to something sane so a corrupt value can't zero the step (which
         // would divide-by-zero below) or spin the loop.
         val interval = if (intervalMin in 1..1440) intervalMin else PingStore.DEFAULT_INTERVAL
         val wake = ((wakeMin % 1440) + 1440) % 1440
         val sleep = ((sleepMin % 1440) + 1440) % 1440
 
-        PingStore.saveParams(ctx, interval, wake, sleep)
+        PingStore.saveParams(ctx, interval, wake, sleep, pausedUntilMs)
 
         val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return 0
         cancelRange(ctx, am)
@@ -49,7 +49,9 @@ object PingScheduler {
 
         var count = 0
         while (t <= end && count < PingStore.ALARM_CAP) {
-            if (PingStore.inPingWindow(minuteOfDay(t), wake, sleep)) {
+            // SNOOZE: skip any boundary at/before the pause horizon — fire() would drop it
+            // silently anyway, so don't burn an alarm slot on it.
+            if (t > pausedUntilMs && PingStore.inPingWindow(minuteOfDay(t), wake, sleep)) {
                 armExact(
                     ctx, am,
                     requestCode = PingStore.REQ_ALARM_BASE + count,
@@ -74,15 +76,20 @@ object PingScheduler {
         val interval = PingStore.getInterval(ctx)
         val wake = PingStore.getWake(ctx)
         val sleep = PingStore.getSleep(ctx)
+        val pausedUntil = PingStore.getPausedUntil(ctx)
         val stepMs = (if (interval in 1..1440) interval else PingStore.DEFAULT_INTERVAL) * 60_000L
 
         val now = System.currentTimeMillis()
         var t = (now / stepMs) * stepMs + stepMs
-        // Bound the search to one day of steps + headroom so an empty window can't spin.
-        val maxSteps = (1440 / maxOf(1, interval)) + 8
+        // Bound the search to one day of steps + headroom so an empty window can't spin. When a
+        // snooze is active the horizon may push the next ping past today, so extend the search to
+        // cover the pause plus a day of steps rather than spinning out of an all-suppressed window.
+        val pauseSteps = if (pausedUntil > now) ((pausedUntil - now) / stepMs).toInt() + 2 else 0
+        val maxSteps = (1440 / maxOf(1, interval)) + 8 + pauseSteps
         var i = 0
         while (i < maxSteps) {
-            if (PingStore.inPingWindow(minuteOfDay(t), wake, sleep)) {
+            // SNOOZE: skip past any boundary at/before the pause horizon (see schedule()).
+            if (t > pausedUntil && PingStore.inPingWindow(minuteOfDay(t), wake, sleep)) {
                 armExact(
                     ctx, am,
                     requestCode = PingStore.REQ_CHAIN,
@@ -106,30 +113,18 @@ object PingScheduler {
 
     /**
      * Fire the chooser NOW for the current slot (Settings "Test the popup" + e2e). slotStart is
-     * now floored to the interval, then we invoke the exact same fire path a real alarm uses,
-     * so the test popup is indistinguishable from a genuine ping. Does NOT chain.
+     * floored to the interval, then we invoke the exact same fire path a real alarm uses — with
+     * ignorePause=true so an active snooze can't swallow the manual test. Routing is identical to
+     * a genuine ping: pressed from the unlocked, foreground app it exercises the real OVERLAY
+     * path (the fix), so what the tester sees is exactly what a real unlocked ping shows. Does
+     * NOT chain.
      */
     fun triggerTestPing(ctx: Context) {
         val interval = PingStore.getInterval(ctx)
         val stepMs = (if (interval in 1..1440) interval else PingStore.DEFAULT_INTERVAL) * 60_000L
         val now = System.currentTimeMillis()
         val slotStart = (now / stepMs) * stepMs
-        // "Test the popup" is pressed from INSIDE the app on an unlocked, foreground screen. A
-        // full-screen INTENT only launches its activity when the device is locked/asleep —
-        // otherwise Android degrades it to a heads-up, so the user (and CI) would never see the
-        // real chooser. For the preview we therefore launch PingActivity DIRECTLY, which always
-        // shows the chooser now regardless of lock state. Real SCHEDULED pings keep going through
-        // the FSI path in PingReceiver.fire (correct for screen-off / over-the-lock-screen). If
-        // the direct launch throws for any reason, fall back to the notification/FSI path.
-        try {
-            val i = Intent(ctx, PingActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                putExtra(PingStore.EXTRA_SLOT_START, slotStart)
-            }
-            ctx.startActivity(i)
-        } catch (_: Throwable) {
-            PingReceiver.fire(ctx, slotStart)
-        }
+        PingReceiver.fire(ctx, slotStart, ignorePause = true)
     }
 
     // --- helpers -----------------------------------------------------------------------

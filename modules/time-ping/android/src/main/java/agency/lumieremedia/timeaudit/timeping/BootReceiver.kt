@@ -32,7 +32,9 @@ class BootReceiver : BroadcastReceiver() {
                 context,
                 PingStore.getInterval(context),
                 PingStore.getWake(context),
-                PingStore.getSleep(context)
+                PingStore.getSleep(context),
+                // Carry the snooze horizon across reboot so a paused audit stays paused.
+                PingStore.getPausedUntil(context)
             )
         } catch (_: Throwable) {
             // Never crash during boot.

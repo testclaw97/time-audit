@@ -35,7 +35,9 @@ class TimePingModule : Module() {
                 val interval = intOf(opts["intervalMinutes"], PingStore.DEFAULT_INTERVAL)
                 val wake = intOf(opts["wakeMinutes"], 7 * 60)
                 val sleep = intOf(opts["sleepMinutes"], 23 * 60)
-                PingScheduler.schedule(context, interval, wake, sleep)
+                // Snooze horizon (epoch-ms). JS sends a Double; absent/invalid → 0 (no snooze).
+                val pausedUntil = longOf(opts["pausedUntilMs"], 0L)
+                PingScheduler.schedule(context, interval, wake, sleep, pausedUntil)
             } catch (_: Throwable) {
                 0
             }
@@ -195,6 +197,20 @@ class TimePingModule : Module() {
             if (d.isFinite()) d.toLong().toInt() else fallback
         }
         is String -> value.trim().toDoubleOrNull()?.toInt() ?: fallback
+        else -> fallback
+    }
+
+    /**
+     * Coerce a JS numeric (Double) — or a String — into a Long epoch-ms value. Falls back to
+     * [fallback] on anything non-finite so a corrupt snooze value can't poison the schedule. A
+     * Double is lossless for epoch-ms values (well within 2^53).
+     */
+    private fun longOf(value: Any?, fallback: Long): Long = when (value) {
+        is Number -> {
+            val d = value.toDouble()
+            if (d.isFinite()) d.toLong() else fallback
+        }
+        is String -> value.trim().toDoubleOrNull()?.toLong() ?: fallback
         else -> fallback
     }
 

@@ -64,6 +64,9 @@ async function armPings(s: Settings): Promise<void> {
           intervalMinutes: s.intervalMinutes,
           wakeMinutes: s.wakeMinutes,
           sleepMinutes: s.sleepMinutes,
+          // Snooze: the scheduler skips boundaries before this instant and the receiver stays
+          // silent until it passes, so pausing popups needs no separate native call.
+          pausedUntilMs: s.pausedUntil,
         });
       } else {
         await TimePing.cancelAll();
@@ -160,6 +163,7 @@ function Root() {
     settings.wakeMinutes,
     settings.sleepMinutes,
     settings.tracking,
+    settings.pausedUntil, // pausing/resuming popups re-arms the schedule
   ]);
 
   if (!ready) {
@@ -184,7 +188,7 @@ function Root() {
     <View style={styles.appRoot}>
       <View style={styles.screen}>
         {tab === "today" ? (
-          <TodayScreen focusSlot={focusSlot} />
+          <TodayScreen focusSlot={focusSlot} onManageCategories={() => setTab("settings")} />
         ) : tab === "insights" ? (
           <InsightsScreen />
         ) : (

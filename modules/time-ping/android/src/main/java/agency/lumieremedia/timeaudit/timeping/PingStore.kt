@@ -38,6 +38,16 @@ object PingStore {
     /** Stable notification id — one live ping at a time; a new ping replaces the old. */
     const val NOTIF_ID = 4088
 
+    /**
+     * LOW-importance channel for [PingOverlayService]'s ongoing foreground-service notice. It is
+     * silent and never heads-up — the overlay WINDOW is the actual UI; this notice only satisfies
+     * the FGS requirement. Kept distinct from [CHANNEL_ID] so the two never share importance.
+     */
+    const val OVERLAY_CHANNEL_ID = "time-ping-overlay"
+
+    /** Distinct notification id for the overlay FGS notice (must not collide with [NOTIF_ID]). */
+    const val OVERLAY_NOTIF_ID = 4089
+
     /** AlarmManager broadcast: "fire a ping now" (carries slotStart + schedule params). */
     const val ACTION_FIRE = "agency.lumieremedia.timeaudit.timeping.ACTION_FIRE"
 
@@ -66,6 +76,7 @@ object PingStore {
     private const val KEY_INTERVAL = "interval"
     private const val KEY_WAKE = "wake"
     private const val KEY_SLEEP = "sleep"
+    private const val KEY_PAUSED_UNTIL = "paused_until" // epoch-ms; pings before this are suppressed
 
     // Fallback schedule params if something reads before the first schedule() call.
     const val DEFAULT_INTERVAL = 15
@@ -232,13 +243,18 @@ object PingStore {
 
     // --- schedule params (receiver re-chain + boot restore) ----------------------------
 
-    /** Remember the last schedule() args so PingReceiver can chain + BootReceiver can restore. */
-    fun saveParams(ctx: Context, intervalMin: Int, wakeMin: Int, sleepMin: Int) {
+    /**
+     * Remember the last schedule() args so PingReceiver can chain + BootReceiver can restore.
+     * [pausedUntilMs] is the snooze horizon (epoch-ms): pings whose fire time is at/before it are
+     * suppressed. 0 (the default) means "no snooze active".
+     */
+    fun saveParams(ctx: Context, intervalMin: Int, wakeMin: Int, sleepMin: Int, pausedUntilMs: Long = 0L) {
         synchronized(lock) {
             prefs(ctx).edit()
                 .putInt(KEY_INTERVAL, intervalMin)
                 .putInt(KEY_WAKE, wakeMin)
                 .putInt(KEY_SLEEP, sleepMin)
+                .putLong(KEY_PAUSED_UNTIL, pausedUntilMs)
                 .apply()
         }
     }
@@ -251,6 +267,9 @@ object PingStore {
     fun getWake(ctx: Context): Int = prefs(ctx).getInt(KEY_WAKE, DEFAULT_WAKE)
     fun getSleep(ctx: Context): Int = prefs(ctx).getInt(KEY_SLEEP, DEFAULT_SLEEP)
 
+    /** Snooze horizon (epoch-ms). 0 = no active snooze. Read by fire() + the scheduler. */
+    fun getPausedUntil(ctx: Context): Long = prefs(ctx).getLong(KEY_PAUSED_UNTIL, 0L)
+
     /** Wipe the stored params (called on cancelAll) so a reboot won't resurrect the pings. */
     fun clearParams(ctx: Context) {
         synchronized(lock) {
@@ -258,6 +277,7 @@ object PingStore {
                 .remove(KEY_INTERVAL)
                 .remove(KEY_WAKE)
                 .remove(KEY_SLEEP)
+                .remove(KEY_PAUSED_UNTIL)
                 .apply()
         }
     }

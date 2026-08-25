@@ -51,15 +51,25 @@ appId: agency.lumieremedia.timeaudit
     timeout: 20000
 - takeScreenshot: 03-settings
 - tapOn: "Test the popup.*"
-# THE PROOF: the native full-screen chooser Activity appears over the app. Hard assert.
+# THE PROOF: the native full-screen chooser appears over the app (overlay window when the
+# overlay permission is granted, as it is in CI). Hard assert.
 - extendedWaitUntil:
     visible: "What are you doing right now.*"
     timeout: 15000
 - takeScreenshot: 04-POPUP-chooser
-# One-tap log: pick the "Work" category chip. Chooser records a PendingLog and finishes.
+# Prove it's a real OVERLAY WINDOW (the fix), not a dismissible Activity: press Home — the
+# launcher comes forward but the chooser must STAY on top (an Activity would be backgrounded).
+- pressKey: Home
+- takeScreenshot: 04b-overlay-over-home
+- extendedWaitUntil:
+    visible: "What are you doing right now.*"
+    timeout: 8000
+    optional: true
+# One-tap log: pick the "Work" category chip. Chooser records a PendingLog and tears down.
 - tapOn: "Work"
 - takeScreenshot: 05-after-pick
-# Back in the app; the foreground drain replays the pick into the log. Confirm on Today.
+# Reopen the app; the foreground drain replays the pick into the log. Confirm on Today.
+- launchApp
 - tapOn:
     text: "Today"
     optional: true
