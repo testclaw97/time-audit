@@ -8,8 +8,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space, type } from "../theme";
 import PressableScale from "./PressableScale";
 
-// Where "Report a problem" / "Suggest a feature" emails go. TJ: set this to your support inbox.
-const FEEDBACK_EMAIL = "feedback@timeaudit.app";
+// Where "Report a problem" / "Suggest a feature" emails go (TJ's infra/handle account, NOT his
+// personal email). NOTE: a mailto shows this address to the user in their mail composer's To:
+// field — it is NOT hidden. For zero email exposure, switch this to a Google Form URL instead.
+const FEEDBACK_EMAIL = "tjkap123@gmail.com";
 const APP_VERSION = "1.0.0";
 
 const SHARE_TEXT =
