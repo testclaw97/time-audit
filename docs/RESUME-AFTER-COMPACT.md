@@ -1,5 +1,33 @@
 # RESUME AFTER COMPACT — Time Audit (2026-08-26)
 
+## UPDATE — 2026-08-26 PM (while TJ walking): v0.3.1 JS finished + reviewed + fixed, CI green
+- **v0.3.1 JS was already COMPLETE** (worker had finished SettingsScreen OEM UI + styles, lock-screen
+  toggle, engine-health row, and the mandatory onboarding gate). tsc + web export clean. CI
+  `assembleRelease` GREEN twice → Kotlin compiles, installable APK built (artifact `time-audit-release-apk`).
+- **Two independent adversarial code reviews done** (native engine + JS/contract). Both corroborated a
+  pending-log drain data-loss race. **6 surgical fixes applied + committed + pushed + CI-regated:**
+  atomic `takePendingLogs()` (native+store, kills the drain race); onboarding notification-denial
+  ESCAPE (canAskAgain → "Open settings" via Linking, no more permanent lockout); OEM finish-gate waits
+  for Build.MANUFACTURER (closes fast-tap bypass); `cancelAll` also cancels REQ_TEST; `teardown()`
+  cancels the check-in notif; `hydrate()` stops aliasing DEFAULT_SETTINGS.
+- **STILL OPEN — flagged for TJ's call (NOT fixed, need design or on-device):**
+  1. **"Other" from the lock screen is a dead-end** (MEDIUM): native writes `__other__` pending log +
+     opens the app, but NOTHING in JS reads the launch-intent slot → custom label silently dropped on
+     drain. Real broken flow. Fix = a native `consumeLaunchSlot()` + App.tsx cold-start wiring (needs device).
+  2. **Chain can terminate with no watchdog** (MEDIUM): if `armNextBoundary` ever returns false the
+     cadence dies until app-open/reboot (both ARE partial backstops). Proper fix = WorkManager watchdog
+     or a non-rendering re-arm alarm (already on the Phase-B reliability list).
+  3. **Essentials over-gate** (design): overlay+exact HARD-block onboarding, but per the Kotlin design
+     they're "strict upgrades" (the notification floor works without them). Notifications is the true
+     floor. TJ to decide: demote overlay/exact to "recommended", or keep hard-gated (he asked for
+     "the 100% important ones must be flipped on").
+  4. **Epoch-vs-local boundary drift** (LOW/cosmetic): at coarse intervals (60m) in half-hour zones
+     (India UTC+5:30) pings land at :30 not :00. Fine at 15m in Germany. Align to local midnight if it matters.
+- Next: bring up the Poco F5 rig (step 1 below) → on-device test v0.3.1 → decide the 4 open items → ship.
+
+---
+
+
 ## Where we are (the big picture)
 - **v0.3.0 shipped + CONFIRMED working on TJ's REAL phone** (Poco F5, Xiaomi Android 15 / MIUI V816).
   The full-screen popup fired over his locked screen — TJ saw it. The persistent-FGS engine + the
