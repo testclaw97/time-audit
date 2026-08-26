@@ -10,15 +10,17 @@ import android.view.WindowManager
 import androidx.core.app.NotificationManagerCompat
 
 /**
- * The LOCKED / screen-off ping surface — one tap logs a slot straight from the lock screen. The
- * chooser view tree itself lives in [ChooserUi] (shared byte-for-byte with the unlocked overlay
- * path in [PingOverlayService]); this Activity only owns the lock-screen surfacing and the
- * "picked / other / skip" lifecycle.
+ * The LOCKED / screen-off ping surface — one tap logs a slot straight from the lock screen. It is
+ * launched by the check-in notification's full-screen intent (set by [PingService] on the locked
+ * branch). The chooser view tree itself lives in [ChooserUi] (shared byte-for-byte with the
+ * unlocked overlay path drawn by [PingService]); this Activity only owns the lock-screen surfacing
+ * and the "picked / other / skip" lifecycle.
  *
  * WHY an Activity here and an overlay window there: an overlay (TYPE_APPLICATION_OVERLAY) cannot
  * draw over a secure keyguard, but an Activity with setShowWhenLocked can — so the locked case
- * MUST be an Activity. [PingReceiver.fire] routes the unlocked/in-use case to the overlay service
- * instead (a background Activity start is degraded to a heads-up on Android 14/15).
+ * MUST be an Activity, and it is reached via a full-screen-intent notification (which only launches
+ * its Activity while the phone is LOCKED). [PingService.render] draws the overlay directly for the
+ * unlocked/in-use case instead (a background Activity start is degraded to a heads-up on 14/15).
  *
  * Robustness is paramount: this activity can be shown OVER the lock screen, so a crash here could
  * wedge the user out of their phone. Every path that could throw is guarded and simply [finish]es
@@ -123,7 +125,7 @@ class PingActivity : Activity() {
 
     private fun dismissNotification() {
         try {
-            NotificationManagerCompat.from(this).cancel(PingStore.NOTIF_ID)
+            NotificationManagerCompat.from(this).cancel(PingStore.CHECKIN_NOTIF_ID)
         } catch (_: Throwable) {
         }
     }

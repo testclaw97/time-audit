@@ -19,11 +19,18 @@ const K_ENTRIES = "ta:entries:v1";
 /** A loggable activity category. `id` is stable and shared with the native chooser (the
  *  Kotlin module seeds the SAME ids from DEFAULT_CATEGORIES), so a PendingLog's `category`
  *  can be resolved back to a label here. */
+/** Hormozi's time buckets — the classification that powers the "where did my time go" stat.
+ *  deep = high-value creation; shallow = necessary but low-value; reactive = interruptions /
+ *  other-driven / distraction. Every category is tagged with one so Stats can show both the
+ *  per-category breakdown AND the blunt "X% of your time was shallow/reactive" headline. */
+export type CategoryKind = "deep" | "shallow" | "reactive";
+
 export interface Category {
   id: string;
   emoji: string;
   label: string;
   color: string;
+  kind: CategoryKind; // Deep / Shallow / Reactive — user-editable, defaulted per seed below
 }
 
 export interface Settings {
@@ -49,16 +56,16 @@ export type Entries = Record<string, Entry>;
 // module's Kotlin seed — the native chooser records a PendingLog carrying one of THESE ids and
 // the store resolves it back to `.label` on drain. Order here is the default display order.
 export const DEFAULT_CATEGORIES: Category[] = [
-  { id: "work", emoji: "💼", label: "Work", color: "#f5a623" },
-  { id: "deep", emoji: "🎯", label: "Deep work", color: "#ffb84d" },
-  { id: "scroll", emoji: "📱", label: "Scrolling", color: "#ff5d6c" },
-  { id: "eat", emoji: "🍽️", label: "Eating", color: "#38c8b0" },
-  { id: "move", emoji: "🏋️", label: "Exercise", color: "#7bd88f" },
-  { id: "rest", emoji: "😴", label: "Rest", color: "#6c8cff" },
-  { id: "people", emoji: "👥", label: "People", color: "#b98cff" },
-  { id: "fun", emoji: "🎬", label: "Leisure", color: "#ff9f43" },
-  { id: "travel", emoji: "🚗", label: "Travel", color: "#8a94a6" },
-  { id: "learn", emoji: "🧠", label: "Learning", color: "#4dd0e1" },
+  { id: "work", emoji: "💼", label: "Work", color: "#f5a623", kind: "shallow" },
+  { id: "deep", emoji: "🎯", label: "Deep work", color: "#ffb84d", kind: "deep" },
+  { id: "scroll", emoji: "📱", label: "Scrolling", color: "#ff5d6c", kind: "reactive" },
+  { id: "eat", emoji: "🍽️", label: "Eating", color: "#38c8b0", kind: "shallow" },
+  { id: "move", emoji: "🏋️", label: "Exercise", color: "#7bd88f", kind: "deep" },
+  { id: "rest", emoji: "😴", label: "Rest", color: "#6c8cff", kind: "shallow" },
+  { id: "people", emoji: "👥", label: "People", color: "#b98cff", kind: "shallow" },
+  { id: "fun", emoji: "🎬", label: "Leisure", color: "#ff9f43", kind: "shallow" },
+  { id: "travel", emoji: "🚗", label: "Travel", color: "#8a94a6", kind: "reactive" },
+  { id: "learn", emoji: "🧠", label: "Learning", color: "#4dd0e1", kind: "deep" },
 ];
 
 const DEFAULT_SETTINGS: Settings = {
@@ -110,6 +117,11 @@ export async function hydrate(): Promise<void> {
     // the in-app chips with nothing to show, so fall back to the defaults.
     if (!Array.isArray(settings.categories) || settings.categories.length === 0) {
       settings.categories = DEFAULT_CATEGORIES;
+    } else {
+      // Migration: categories persisted before the Deep/Shallow/Reactive tag get a default kind.
+      settings.categories = settings.categories.map((c) =>
+        c.kind ? c : { ...c, kind: "shallow" as CategoryKind },
+      );
     }
     const entries = rawE ? (JSON.parse(rawE) as Entries) : {};
     setState({ ready: true, settings, entries });
@@ -236,12 +248,14 @@ export async function addCategory(partial: {
   emoji: string;
   label: string;
   color: string;
+  kind?: CategoryKind;
 }): Promise<Category> {
   const cat: Category = {
     id: makeCategoryId(partial.label, state.settings.categories),
     emoji: partial.emoji,
     label: partial.label,
     color: partial.color,
+    kind: partial.kind ?? "shallow",
   };
   await commitCategories([...state.settings.categories, cat]);
   return cat;

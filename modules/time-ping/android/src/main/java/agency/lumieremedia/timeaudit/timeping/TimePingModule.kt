@@ -57,6 +57,19 @@ class TimePingModule : Module() {
             }
         }
 
+        /**
+         * Is the persistent ping engine ([PingService]) currently alive? Lets the app surface
+         * engine health (e.g. a "tracking is running" indicator). Reads the @Volatile liveness
+         * flag the service sets in onCreate/onDestroy — cheap, no IPC, no round-trip to the service.
+         */
+        AsyncFunction("isEngineRunning") {
+            try {
+                PingService.isRunning
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
         // --- categories + pending logs ---------------------------------------------------
         AsyncFunction("setCategories") { cats: List<Map<String, Any?>> ->
             try {
@@ -139,8 +152,9 @@ class TimePingModule : Module() {
         }
 
         // "Display over other apps" (SYSTEM_ALERT_WINDOW). This is the key grant for showing the
-        // FULL-SCREEN chooser while the phone is unlocked/in use: it lets PingReceiver start
-        // PingActivity from the background (see PingReceiver.fire). Settings-granted, no runtime dialog.
+        // FULL-SCREEN chooser while the phone is unlocked/in use: it lets [PingService] draw the
+        // overlay window over whatever app is in front (see PingService.render's overlay branch).
+        // Settings-granted, no runtime dialog.
         AsyncFunction("hasOverlayPermission") {
             try {
                 Settings.canDrawOverlays(context)

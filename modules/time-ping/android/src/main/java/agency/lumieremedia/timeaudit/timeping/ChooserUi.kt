@@ -19,14 +19,13 @@ import java.util.Locale
  * The ONE implementation of the full-screen category chooser view tree, shared by the two
  * surfaces that can present it:
  *
- *   · [PingActivity]        — the locked / screen-off path (an Activity with
- *                             setShowWhenLocked can draw over a secure keyguard; an overlay
- *                             window cannot).
- *   · [PingOverlayService]  — the unlocked / in-use path (a TYPE_APPLICATION_OVERLAY window
- *                             drawn from a foreground service; this sidesteps the Android 14+
- *                             background-activity-launch restriction that silently degrades a
- *                             full-screen INTENT to a heads-up while the phone is in use — the
- *                             exact same mechanism Mr. Productive's block screen uses).
+ *   · [PingActivity]  — the locked / screen-off path (an Activity with setShowWhenLocked can draw
+ *                       over a secure keyguard; an overlay window cannot).
+ *   · [PingService]   — the unlocked / in-use path (a TYPE_APPLICATION_OVERLAY window drawn from
+ *                       the persistent foreground service; this sidesteps the Android 14+
+ *                       background-activity-launch restriction that silently degrades a full-screen
+ *                       INTENT to a heads-up while the phone is in use — the exact same mechanism
+ *                       Mr. Productive's block screen uses).
  *
  * Both render IDENTICAL chips by calling [build] here, so the user sees the same UI whether the
  * ping arrives locked or unlocked. No res/ XML — the whole tree is built in Kotlin (matching
