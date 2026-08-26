@@ -25,6 +25,7 @@ import OnboardingScreen from "./src/screens/OnboardingScreen";
 import TodayScreen from "./src/screens/TodayScreen";
 import InsightsScreen from "./src/screens/InsightsScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
+import FeedbackFab from "./src/ui/FeedbackFab";
 import {
   drainPendingLogs,
   getState,
@@ -254,6 +255,9 @@ function Root() {
           );
         })}
       </View>
+
+      {/* Always-on feedback / share button, bottom-right over the tab screens. */}
+      <FeedbackFab />
 
       {/* Settings — a dismissible full-screen modal opened by the Today header gear. */}
       <Modal
