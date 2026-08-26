@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   AppState,
   AppStateStatus,
+  Modal,
   Platform,
   StyleSheet,
   Text,
@@ -99,18 +100,20 @@ async function consumeLaunchSlot(): Promise<number | null> {
   }
 }
 
-type Tab = "today" | "insights" | "settings";
+// Two tabs only — Today (the truth) and Insights (trends + share). Settings lives behind a gear
+// on the Today header, shown as a dismissible modal (so "how do I get back" is never a question).
+type Tab = "today" | "insights";
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
-  { key: "today", label: "Today", icon: "◷" },
-  { key: "insights", label: "Insights", icon: "▟" },
-  { key: "settings", label: "Settings", icon: "⚙" },
+  { key: "today", label: "Today", icon: "🏠" },
+  { key: "insights", label: "Insights", icon: "📊" },
 ];
 
 function Root() {
   const insets = useSafeAreaInsets();
   const { ready, settings } = useStore();
   const [tab, setTab] = useState<Tab>("today");
+  const [showSettings, setShowSettings] = useState(false);
   const [focusSlot, setFocusSlot] = useState<number | null>(null);
   const seededRef = useRef(false);
 
@@ -223,15 +226,13 @@ function Root() {
     <View style={styles.appRoot}>
       <View style={styles.screen}>
         {tab === "today" ? (
-          <TodayScreen focusSlot={focusSlot} onManageCategories={() => setTab("settings")} />
-        ) : tab === "insights" ? (
-          <InsightsScreen />
+          <TodayScreen focusSlot={focusSlot} onOpenSettings={() => setShowSettings(true)} />
         ) : (
-          <SettingsScreen onReset={() => setTab("today")} />
+          <InsightsScreen />
         )}
       </View>
 
-      <View style={[styles.tabbar, { paddingBottom: insets.bottom + space.s0 }]}>
+      <View style={[styles.tabbar, { paddingBottom: insets.bottom + space.s1 }]}>
         {TABS.map((t) => {
           const active = tab === t.key;
           return (
@@ -253,6 +254,22 @@ function Root() {
           );
         })}
       </View>
+
+      {/* Settings — a dismissible full-screen modal opened by the Today header gear. */}
+      <Modal
+        visible={showSettings}
+        animationType="slide"
+        onRequestClose={() => setShowSettings(false)}
+      >
+        <SettingsScreen
+          onClose={() => setShowSettings(false)}
+          onReset={() => {
+            setShowSettings(false);
+            setFocusSlot(null);
+            setTab("today");
+          }}
+        />
+      </Modal>
     </View>
   );
 }
@@ -277,16 +294,23 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   tabbar: {
     flexDirection: "row",
-    backgroundColor: colors.bgSoft,
+    backgroundColor: colors.surface,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
+    borderTopColor: colors.lineStrong,
     paddingTop: space.s1,
     paddingHorizontal: space.s2,
     ...(Platform.OS === "web" ? { maxWidth: 480, width: "100%", alignSelf: "center" } : {}),
   },
-  tab: { flex: 1, alignItems: "center", justifyContent: "center", gap: 3, paddingVertical: space.s0 },
-  tabIcon: { fontSize: 20, color: colors.faint },
-  tabIconActive: { color: colors.accent },
+  tab: {
+    flex: 1,
+    minHeight: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+    paddingVertical: space.s1,
+  },
+  tabIcon: { fontSize: 22, opacity: 0.5 },
+  tabIconActive: { opacity: 1 },
   tabLabel: { ...type.caption, fontSize: 11, color: colors.faint, fontWeight: "700" },
-  tabLabelActive: { color: colors.fg },
+  tabLabelActive: { color: colors.accent },
 });

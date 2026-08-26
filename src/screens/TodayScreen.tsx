@@ -1,25 +1,29 @@
-// Home / Today — a simple home: two summary boxes (working time + categories), a "pause
-// popups" snooze control, then the 15-minute timetable (newest at the top). The timetable is a
-// flat, scannable list — EVERY interval from wake to now is its own row (no merging, no
-// expand/collapse). Each row shows the logged category (dot + emoji + label) or a quiet
-// "tap to log"; the current interval is marked NOW. Tapping any row logs/edits THAT interval
-// via the QuickEntry above (the "Editing …" header + one-tap chips). One tap on a chip = logged.
+// Home — "The Truth". This is the PAYOFF screen, not a logging form: the popup logs (one tap
+// from the lock screen), and here you come to FACE where the day went. A streak, a hero showing
+// hours tracked + the Deep/Shallow/Reactive split, a blunt Hormozi verdict, then a glanceable
+// timeline where tapping any block opens a modal to log/fill it. Settings + pause live in the
+// header (gear + bell); the old always-on "what are you doing?" picker is gone by design.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AppState, Modal, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space, type } from "../theme";
 import Card from "../ui/Card";
 import FadeIn from "../ui/FadeIn";
 import QuickEntry from "../ui/QuickEntry";
 import PressableScale from "../ui/PressableScale";
-import TimeField from "../ui/TimeField";
 import Button from "../ui/Button";
 import type { Category } from "../lib/store";
-import { logEntry, pausePopups, resumePopups, updateSettings, useStore } from "../lib/store";
+import { logEntry, logManyEntries, pausePopups, resumePopups, useStore } from "../lib/store";
+import {
+  KIND_META,
+  computeKindSplit,
+  computeStreak,
+  hormoziVerdict,
+  todayKeys,
+} from "../lib/insights";
 import TimePing, { isAvailable } from "../../modules/time-ping";
 import {
   formatClock,
-  formatClockMinutes,
   formatDuration,
   getSlotMinutes,
   getSlotMs,
@@ -27,19 +31,16 @@ import {
   todaySlots,
 } from "../lib/time";
 
-// Safety cap on how many interval rows we render at once (newest first). wake→now is at most a
-// day; at a 5-min interval an 18h window is ~216 rows, so we cap and note "+N earlier".
+// Safety cap on timeline rows (newest first); the rest is a quiet "+N earlier" note.
 const MAX_ROWS = 180;
 
-// Snooze presets. "Until tomorrow" is computed at tap time from the wake boundary.
 const SNOOZE_PRESETS = [
   { label: "30 min", ms: 30 * 60 * 1000 },
   { label: "1 hour", ms: 60 * 60 * 1000 },
   { label: "2 hours", ms: 2 * 60 * 60 * 1000 },
 ] as const;
 
-/** Milliseconds from now until the next local wake boundary (today if still ahead, else
- *  tomorrow) — the "silence popups until tomorrow morning" option. */
+/** Milliseconds until the next local wake boundary (today if ahead, else tomorrow). */
 function msUntilNextWake(wakeMinutes: number): number {
   const now = new Date();
   const wake = new Date(now);
@@ -50,39 +51,31 @@ function msUntilNextWake(wakeMinutes: number): number {
 
 export default function TodayScreen({
   focusSlot,
-  onManageCategories,
+  onOpenSettings,
 }: {
   focusSlot?: number | null;
-  /** Switch to the Settings tab so the user can add/edit categories. App.tsx wires this;
-   *  no-op (the box just isn't tappable) when undefined. */
-  onManageCategories?: () => void;
+  /** Open the Settings modal (App.tsx wires this). */
+  onOpenSettings?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { settings, entries } = useStore();
   const [now, setNow] = useState(() => new Date());
-  const [editing, setEditing] = useState<number | null>(null);
-  const [editHours, setEditHours] = useState(false);
-  const [showSnooze, setShowSnooze] = useState(false);
-  // A 1s heartbeat while paused so the remaining time stays fresh and the control flips back
-  // to "Pause popups" the moment the snooze expires. `nowMs` is only read by the snooze block.
+  const [logSlot, setLogSlot] = useState<number | null>(null); // slot open in the log modal
+  const [showPause, setShowPause] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  // On a native Android build, whether the popup's two special-access grants are still missing.
-  // Overlay = cover the screen while in use; full-screen-intent = show over the LOCK SCREEN.
-  // If EITHER is missing the popup can't fully work — drives the nudge banner. False on web/iOS.
   const [overlayNeeded, setOverlayNeeded] = useState(false);
   const [fsiNeeded, setFsiNeeded] = useState(false);
 
   const paused = settings.pausedUntil > nowMs;
   const permNeeded = overlayNeeded || fsiNeeded;
 
-  // Keep the timeline live — refresh the "now" slot every 30s.
+  // Keep the timeline + "now" live.
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(id);
   }, []);
 
-  // While a snooze is active, tick every second so the "paused until …" line and the
-  // paused/not-paused flip stay accurate. No timer runs when popups aren't paused.
+  // Tick each second only while paused, so the "paused until…" line stays fresh.
   useEffect(() => {
     if (settings.pausedUntil <= Date.now()) {
       setNowMs(Date.now());
@@ -93,8 +86,7 @@ export default function TodayScreen({
     return () => clearInterval(id);
   }, [settings.pausedUntil]);
 
-  // Track BOTH popup grants on mount + on every return to the foreground (they're granted in a
-  // system screen, so they flip off-screen). Guarded — no-op on web/iOS where the banner stays hidden.
+  // Popup grants (overlay = in-use full-screen; FSI = over the lock screen). No-op on web/iOS.
   const refreshPerms = useCallback(async () => {
     if (!isAvailable() || !TimePing) {
       setOverlayNeeded(false);
@@ -121,7 +113,6 @@ export default function TodayScreen({
     return () => sub.remove();
   }, [refreshPerms]);
 
-  // Tapping the banner requests whichever grant is missing (overlay first, then lock-screen).
   const requestMissing = async () => {
     if (!isAvailable() || !TimePing) return;
     try {
@@ -133,84 +124,99 @@ export default function TodayScreen({
     refreshPerms();
   };
 
-  // A notification tap can ask us to edit a specific slot.
+  // A notification / "Other" tap can ask us to open the log modal on a specific slot.
   useEffect(() => {
-    if (typeof focusSlot === "number") setEditing(slotStartFor(focusSlot));
+    if (typeof focusSlot === "number") setLogSlot(slotStartFor(focusSlot));
   }, [focusSlot]);
 
-  // Per-slot geometry follows the user's chosen interval (5/10/15/…/60 min), not a fixed 15.
   const slotMs = getSlotMs();
   const slotMin = getSlotMinutes();
-
   const currentSlot = slotStartFor(now.getTime());
+
   const slots = useMemo(
     () => todaySlots(settings.wakeMinutes, settings.sleepMinutes, now),
     [settings.wakeMinutes, settings.sleepMinutes, now],
   );
 
-  // Resolve a Category.id -> its full record (color/emoji/label) for dots + chip tinting.
   const catById = useMemo(
     () => new Map(settings.categories.map((c) => [c.id, c] as const)),
     [settings.categories],
   );
+
+  // The truth: today's Deep/Shallow/Reactive split + streak + verdict.
+  const split = useMemo(
+    () =>
+      computeKindSplit(
+        entries,
+        todayKeys(settings.wakeMinutes, settings.sleepMinutes, now),
+        settings.categories,
+      ),
+    [entries, settings.wakeMinutes, settings.sleepMinutes, settings.categories, now],
+  );
+  const streak = useMemo(
+    () => computeStreak(entries, settings.wakeMinutes, settings.sleepMinutes, now),
+    [entries, settings.wakeMinutes, settings.sleepMinutes, now],
+  );
+  const verdict = useMemo(() => hormoziVerdict(split), [split]);
 
   const loggedCount = useMemo(
     () => slots.filter((s) => entries[String(s)]?.text?.trim()).length,
     [slots, entries],
   );
 
-  // Newest interval first — the plain wake→now list, capped for safety. NO merging: every
-  // interval is its own row. Slice keeps the most recent MAX_ROWS; the rest is a quiet note.
   const rowsDesc = useMemo(() => [...slots].reverse(), [slots]);
   const shownRows = rowsDesc.slice(0, MAX_ROWS);
   const earlierCount = rowsDesc.length - shownRows.length;
 
-  const editingSlot = editing ?? currentSlot;
-  const editingIsCurrent = editingSlot === currentSlot;
+  // Catch-up: the run of consecutive unlogged blocks ending at NOW — i.e. what you missed while
+  // you were away. One category tap fills the whole gap (see catchUpFill). Only surfaced at ≥2.
+  const trailingGap = useMemo(() => {
+    const g: number[] = [];
+    for (let i = slots.length - 1; i >= 0; i--) {
+      const s = slots[i];
+      if (entries[String(s)]?.text?.trim()) break;
+      g.push(s);
+    }
+    return g.reverse(); // ascending
+  }, [slots, entries]);
+  const gapMinutes = trailingGap.length * slotMin;
 
-  const rawEditing = entries[String(editingSlot)];
-  const currentEntry =
-    rawEditing?.text?.trim()
+  const catchUpFill = (cat: Category) => {
+    if (trailingGap.length === 0) return;
+    void logManyEntries(trailingGap, cat.label, cat.id);
+  };
+
+  // ---- log modal ----
+  const openLog = (slot: number) => setLogSlot(slotStartFor(slot));
+  const closeLog = () => setLogSlot(null);
+  const logEntryFor = (text: string, category?: string) => {
+    if (logSlot == null) return;
+    logEntry(text, logSlot, category);
+    closeLog();
+  };
+
+  const logModalEntry = logSlot != null ? entries[String(logSlot)] : undefined;
+  const logModalCurrent =
+    logModalEntry?.text?.trim()
       ? {
-          label: rawEditing.text.trim(),
-          category: rawEditing.category ? catById.get(rawEditing.category) : undefined,
+          label: logModalEntry.text.trim(),
+          category: logModalEntry.category ? catById.get(logModalEntry.category) : undefined,
         }
       : null;
+  const logIsCurrent = logSlot === currentSlot;
 
-  const submit = (text: string) => {
-    logEntry(text, editingSlot);
-    setEditing(null);
-  };
-
-  const pickCategory = (cat: Category) => {
-    logEntry(cat.label, editingSlot, cat.id);
-    setEditing(null);
-  };
-
-  const clearSlot = () => {
-    logEntry("", editingSlot);
-  };
-
-  // Tap a timetable row -> edit that interval via the QuickEntry above. Tapping the current
-  // interval returns to the plain "right now" picker (editing = null).
-  const selectSlot = (slot: number) => {
-    const s = slotStartFor(slot);
-    setEditing(s === currentSlot ? null : s);
-  };
-
-  // ---- snooze actions ----
+  // ---- pause actions ----
   const snooze = (ms: number) => {
     void pausePopups(ms);
-    setShowSnooze(false);
+    setShowPause(false);
   };
-  const snoozeUntilTomorrow = () => snooze(msUntilNextWake(settings.wakeMinutes));
   const resume = () => {
     void resumePopups();
-    setShowSnooze(false);
+    setShowPause(false);
   };
 
   const dateLabel = now.toLocaleDateString(undefined, {
-    weekday: "short",
+    weekday: "long",
     month: "short",
     day: "numeric",
   });
@@ -220,183 +226,133 @@ export default function TodayScreen({
       style={styles.root}
       contentContainerStyle={[
         styles.content,
-        { paddingTop: insets.top + space.s3, paddingBottom: insets.bottom + space.s6 },
+        { paddingTop: insets.top + space.s2, paddingBottom: insets.bottom + space.s6 },
       ]}
       showsVerticalScrollIndicator={false}
     >
+      {/* Header: date + streak, pause bell + settings gear */}
+      <FadeIn>
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Text style={[type.label, styles.kicker]}>TODAY</Text>
+            <Text style={[type.heading, styles.headerDate]}>{dateLabel}</Text>
+          </View>
+          <View style={styles.headerActions}>
+            <IconBtn
+              glyph="🔔"
+              active={paused}
+              label={paused ? "Popups paused" : "Pause popups"}
+              onPress={() => setShowPause(true)}
+            />
+            <IconBtn glyph="⚙︎" label="Settings" onPress={onOpenSettings} disabled={!onOpenSettings} />
+          </View>
+        </View>
+      </FadeIn>
+
       {permNeeded ? (
         <FadeIn>
           <PressableScale
             onPress={requestMissing}
             accessibilityLabel="The popup can't fully work yet. Tap to enable."
-            style={styles.overlayBanner}
+            style={styles.banner}
             scaleTo={0.99}
           >
-            <Text style={styles.overlayBannerText}>
-              ⚠️ The popup can't fully work yet — tap to enable.
+            <Text style={styles.bannerText}>⚠️ The popup can't fully work yet — tap to enable.</Text>
+          </PressableScale>
+        </FadeIn>
+      ) : null}
+
+      {paused ? (
+        <FadeIn>
+          <PressableScale onPress={resume} accessibilityLabel="Resume popups" style={styles.pausedPill}>
+            <Text style={styles.pausedPillText} numberOfLines={1}>
+              🔕 Paused until {formatClock(settings.pausedUntil)} · tap to resume
             </Text>
           </PressableScale>
         </FadeIn>
       ) : null}
 
-      {/* Slim header */}
-      <FadeIn>
-        <View style={styles.header}>
-          <Text style={[type.label, styles.kicker]}>TODAY</Text>
-          <Text style={[type.caption, styles.headerDate]}>{dateLabel}</Text>
-        </View>
-      </FadeIn>
-
-      {/* Two summary boxes: working time + categories */}
-      <FadeIn delay={60}>
-        <View style={styles.boxRow}>
-          <PressableScale
-            onPress={() => setEditHours(true)}
-            accessibilityLabel="Edit your working hours"
-            style={styles.boxWrap}
-            scaleTo={0.98}
-          >
-            <Card tone="flat" style={styles.box}>
-              <Text style={[type.label, styles.boxKicker]}>WORKING TIME</Text>
-              <Text style={[type.heading, styles.boxValue]} numberOfLines={1}>
-                {formatClockMinutes(settings.wakeMinutes)}–
-                {formatClockMinutes(settings.sleepMinutes)}
-              </Text>
-              <Text style={[type.caption, styles.boxSub]} numberOfLines={2}>
-                {formatDuration(loggedCount * slotMin)} logged · {loggedCount} of{" "}
-                {slots.length} check-ins
-              </Text>
-              <Text style={styles.boxEdit}>Tap to edit</Text>
-            </Card>
-          </PressableScale>
-
-          <PressableScale
-            onPress={onManageCategories}
-            disabled={!onManageCategories}
-            accessibilityLabel="Manage categories"
-            style={styles.boxWrap}
-            scaleTo={0.98}
-          >
-            <Card tone="flat" style={styles.box}>
-              <Text style={[type.label, styles.boxKicker]}>CATEGORIES</Text>
-              <Text style={[type.heading, styles.boxValue]}>
-                {settings.categories.length}
-              </Text>
-              <View style={styles.catDots}>
-                {settings.categories.slice(0, 6).map((c) => (
-                  <View
-                    key={c.id}
-                    style={[styles.catDot, { backgroundColor: c.color }]}
-                  />
-                ))}
-                {settings.categories.length > 6 ? (
-                  <Text style={styles.catMore}>
-                    +{settings.categories.length - 6}
-                  </Text>
-                ) : null}
-              </View>
-              {onManageCategories ? (
-                <Text style={styles.boxEdit}>Tap to manage</Text>
-              ) : null}
-            </Card>
-          </PressableScale>
-        </View>
-      </FadeIn>
-
-      {/* Pause popups (snooze) */}
-      <FadeIn delay={110}>
-        {paused ? (
-          <Card tone="accent" style={styles.snoozePaused}>
-            <View style={styles.snoozePausedText}>
-              <Text style={[type.bodyStrong, styles.snoozePausedTitle]} numberOfLines={1}>
-                🔕 Popups paused until {formatClock(settings.pausedUntil)}
-              </Text>
-              <Text style={[type.caption, styles.snoozePausedSub]}>
-                No check-ins will pop up until then.
-              </Text>
-            </View>
-            <PressableScale
-              onPress={resume}
-              accessibilityLabel="Resume popups now"
-              style={styles.resumeBtn}
-            >
-              <Text style={styles.resumeText}>Resume</Text>
-            </PressableScale>
-          </Card>
-        ) : (
-          <View>
-            <PressableScale
-              onPress={() => setShowSnooze((v) => !v)}
-              accessibilityLabel="Pause popups"
-              style={styles.snoozeRow}
-              scaleTo={0.99}
-            >
-              <Text style={[type.bodyStrong, styles.snoozeRowText]}>🔕 Pause popups</Text>
-              <Text style={styles.snoozeChevron}>{showSnooze ? "▴" : "▾"}</Text>
-            </PressableScale>
-            {showSnooze ? (
-              <View style={styles.snoozeOptions}>
-                {SNOOZE_PRESETS.map((p) => (
-                  <PressableScale
-                    key={p.label}
-                    onPress={() => snooze(p.ms)}
-                    accessibilityLabel={`Pause popups for ${p.label}`}
-                    style={styles.snoozeChip}
-                    scaleTo={0.94}
-                  >
-                    <Text style={styles.snoozeChipText}>{p.label}</Text>
-                  </PressableScale>
-                ))}
+      {/* Catch-up — you've been away; one tap fills the whole gap */}
+      {trailingGap.length >= 2 ? (
+        <FadeIn>
+          <Card tone="accent" style={styles.catchUp}>
+            <Text style={styles.catchUpTitle}>⏳ You've been away</Text>
+            <Text style={styles.catchUpSub}>
+              {trailingGap.length} blocks ({formatDuration(gapMinutes)}) unlogged. What were you doing?
+            </Text>
+            <View style={styles.catchUpChips}>
+              {settings.categories.map((c) => (
                 <PressableScale
-                  onPress={snoozeUntilTomorrow}
-                  accessibilityLabel="Pause popups until tomorrow"
-                  style={styles.snoozeChip}
+                  key={c.id}
+                  onPress={() => catchUpFill(c)}
+                  accessibilityLabel={`Fill the last ${trailingGap.length} blocks with ${c.label}`}
+                  style={styles.catchUpChip}
                   scaleTo={0.94}
                 >
-                  <Text style={styles.snoozeChipText}>Until tomorrow</Text>
+                  <Text style={styles.catchUpEmoji}>{c.emoji}</Text>
+                  <Text style={styles.catchUpChipText} numberOfLines={1}>
+                    {c.label}
+                  </Text>
                 </PressableScale>
-              </View>
-            ) : null}
-          </View>
-        )}
-      </FadeIn>
+              ))}
+            </View>
+            <Text style={styles.catchUpHint}>Different things? Tap each block below instead.</Text>
+          </Card>
+        </FadeIn>
+      ) : null}
 
-      {/* Current-slot quick entry (or the slot you're editing) */}
-      <FadeIn delay={150}>
-        <View style={styles.entryHeader}>
-          <Text style={[type.caption, styles.entryHeaderText]}>
-            {editingIsCurrent
-              ? "What are you doing right now?"
-              : `Editing ${formatClock(editingSlot)}–${formatClock(editingSlot + slotMs)}`}
-          </Text>
-          {!editingIsCurrent ? (
-            <PressableScale onPress={() => setEditing(null)} accessibilityLabel="Cancel edit">
-              <Text style={styles.cancel}>× cancel</Text>
-            </PressableScale>
+      {/* HERO — the truth */}
+      <FadeIn delay={60}>
+        <Card style={styles.hero}>
+          {streak > 0 ? (
+            <View style={styles.streakRow}>
+              <Text style={styles.streakText}>🔥 {streak}-day streak</Text>
+            </View>
           ) : null}
-        </View>
-        <QuickEntry
-          key={editingSlot}
-          placeholder={
-            editingIsCurrent ? "e.g. deep work, email, lunch…" : "Log this check-in…"
-          }
-          categories={settings.categories}
-          onPickCategory={pickCategory}
-          current={currentEntry}
-          onClear={clearSlot}
-          onSubmit={submit}
-        />
+
+          {split.loggedMin > 0 ? (
+            <>
+              <Text style={styles.heroValue}>{formatDuration(split.loggedMin)}</Text>
+              <Text style={styles.heroCaption}>
+                tracked today · {loggedCount} of {slots.length} check-ins
+              </Text>
+
+              <SplitBar split={split} />
+
+              <View style={styles.legend}>
+                <LegendDot kind="deep" pct={split.deepPct} />
+                <LegendDot kind="shallow" pct={split.shallowPct} />
+                <LegendDot kind="reactive" pct={split.reactivePct} />
+              </View>
+            </>
+          ) : (
+            <View style={styles.heroEmpty}>
+              <Text style={styles.heroValue}>—</Text>
+              <Text style={styles.heroCaption}>
+                Nothing logged yet today. Tap a block below, or wait for the next check-in.
+              </Text>
+            </View>
+          )}
+        </Card>
       </FadeIn>
 
-      {/* The 15-minute timetable — one row per interval, newest first, tap to log/edit */}
+      {/* Hormozi verdict */}
+      <FadeIn delay={110}>
+        <View style={styles.verdict}>
+          <Text style={[type.title, styles.verdictHeadline]}>{verdict.headline}</Text>
+          <Text style={[type.body, styles.verdictSub]}>{verdict.sub}</Text>
+        </View>
+      </FadeIn>
+
+      {/* Timeline — tap a block to log/fill it */}
       <View style={styles.timeline}>
-        <Text style={[type.label, styles.timelineLabel]}>TIMETABLE · tap a time to log</Text>
+        <Text style={[type.label, styles.timelineLabel]}>YOUR DAY · tap a block to log</Text>
         {shownRows.length === 0 ? (
           <Card tone="flat" style={styles.empty}>
             <Text style={styles.emptyIcon}>🕒</Text>
             <Text style={[type.bodyStrong, styles.emptyTitle]}>Your day starts here</Text>
             <Text style={[type.caption, styles.emptyBody]}>
-              Your first check-in opens at your wake time. Log what you're doing above.
+              Your first check-in opens at your wake time. Tap any block to log it.
             </Text>
           </Card>
         ) : (
@@ -405,7 +361,6 @@ export default function TodayScreen({
               const e = entries[String(slot)];
               const label = e?.text?.trim() ? e.text.trim() : null;
               const cat = e?.category ? catById.get(e.category) : undefined;
-              const isNow = slot === currentSlot;
               return (
                 <TimelineRow
                   key={slot}
@@ -414,9 +369,8 @@ export default function TodayScreen({
                   label={label}
                   emoji={cat?.emoji}
                   color={cat?.color}
-                  isNow={isNow}
-                  selected={!editingIsCurrent && editingSlot === slot}
-                  onPress={() => selectSlot(slot)}
+                  isNow={slot === currentSlot}
+                  onPress={() => openLog(slot)}
                 />
               );
             })}
@@ -429,37 +383,73 @@ export default function TodayScreen({
         )}
       </View>
 
-      {/* Working-hours editor */}
-      <Modal
-        visible={editHours}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setEditHours(false)}
-      >
-        <View style={styles.modalScrim}>
-          <View style={styles.modalCard}>
-            <Text style={[type.heading, styles.modalTitle]}>Working hours</Text>
-            <Text style={[type.caption, styles.modalSub]}>
-              The window Time Audit tracks and pings you within.
+      {/* Log-a-slot modal */}
+      <Modal visible={logSlot != null} transparent animationType="slide" onRequestClose={closeLog}>
+        <View style={styles.sheetScrim}>
+          <Pressable style={styles.sheetBackdrop} onPress={closeLog} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + space.s2 }]}>
+            <View style={styles.sheetHandle} />
+            <Text style={[type.heading, styles.sheetTitle]}>
+              {logIsCurrent
+                ? "What are you doing right now?"
+                : logSlot != null
+                ? `${formatClock(logSlot)}–${formatClock(logSlot + slotMs)}`
+                : ""}
             </Text>
-            <Card style={styles.modalFieldCard}>
-              <TimeField
-                label="Wake up"
-                icon="☀️"
-                minutes={settings.wakeMinutes}
-                onChange={(m) => updateSettings({ wakeMinutes: m })}
+            {logSlot != null ? (
+              <QuickEntry
+                key={logSlot}
+                placeholder={logIsCurrent ? "e.g. deep work, email, lunch…" : "Log this block…"}
+                categories={settings.categories}
+                onPickCategory={(c: Category) => logEntryFor(c.label, c.id)}
+                current={logModalCurrent}
+                onClear={() => logEntryFor("")}
+                onSubmit={(t: string) => logEntryFor(t)}
               />
-              <View style={styles.modalDivider} />
-              <TimeField
-                label="Wind down"
-                icon="🌙"
-                minutes={settings.sleepMinutes}
-                onChange={(m) => updateSettings({ sleepMinutes: m })}
-              />
-            </Card>
-            <View style={styles.modalActions}>
-              <Button label="Done" onPress={() => setEditHours(false)} />
-            </View>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Pause popups sheet */}
+      <Modal visible={showPause} transparent animationType="slide" onRequestClose={() => setShowPause(false)}>
+        <View style={styles.sheetScrim}>
+          <Pressable
+            style={styles.sheetBackdrop}
+            onPress={() => setShowPause(false)}
+            accessibilityLabel="Close"
+          />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + space.s2 }]}>
+            <View style={styles.sheetHandle} />
+            <Text style={[type.heading, styles.sheetTitle]}>Pause popups</Text>
+            <Text style={[type.caption, styles.sheetSub]}>
+              Silence the check-in popups for a while — tracking stays on.
+            </Text>
+            {paused ? (
+              <Button label={`Resume now (paused until ${formatClock(settings.pausedUntil)})`} onPress={resume} />
+            ) : (
+              <View style={styles.pauseGrid}>
+                {SNOOZE_PRESETS.map((p) => (
+                  <PressableScale
+                    key={p.label}
+                    onPress={() => snooze(p.ms)}
+                    accessibilityLabel={`Pause for ${p.label}`}
+                    style={styles.pauseChip}
+                    scaleTo={0.95}
+                  >
+                    <Text style={styles.pauseChipText}>{p.label}</Text>
+                  </PressableScale>
+                ))}
+                <PressableScale
+                  onPress={() => snooze(msUntilNextWake(settings.wakeMinutes))}
+                  accessibilityLabel="Pause until tomorrow"
+                  style={styles.pauseChip}
+                  scaleTo={0.95}
+                >
+                  <Text style={styles.pauseChipText}>Until tomorrow</Text>
+                </PressableScale>
+              </View>
+            )}
           </View>
         </View>
       </Modal>
@@ -467,9 +457,69 @@ export default function TodayScreen({
   );
 }
 
-// One interval row in the flat timetable. Logged rows get a solid surface + colored dot/emoji
-// so they pop; empty rows stay a quiet "tap to log" so the day's real entries stand out. The
-// current interval is tinted and badged NOW. Tapping the row edits it via the QuickEntry above.
+/** The Deep/Shallow/Reactive stacked bar over the whole elapsed window — unlogged shows as the
+ *  honest grey remainder, so gaps are part of the truth. */
+function SplitBar({
+  split,
+}: {
+  split: ReturnType<typeof computeKindSplit>;
+}) {
+  const total = split.totalMin || 1;
+  const seg = (min: number, color: string, key: string) =>
+    min > 0 ? (
+      <View key={key} style={{ width: `${(min / total) * 100}%`, backgroundColor: color }} />
+    ) : null;
+  return (
+    <View style={styles.splitBar}>
+      {seg(split.deepMin, KIND_META.deep.color, "deep")}
+      {seg(split.shallowMin, KIND_META.shallow.color, "shallow")}
+      {seg(split.reactiveMin, KIND_META.reactive.color, "reactive")}
+      {seg(split.unloggedMin, colors.gap, "gap")}
+    </View>
+  );
+}
+
+function LegendDot({ kind, pct }: { kind: keyof typeof KIND_META; pct: number }) {
+  const meta = KIND_META[kind];
+  return (
+    <View style={styles.legendItem}>
+      <View style={[styles.legendDot, { backgroundColor: meta.color }]} />
+      <Text style={styles.legendText}>
+        {meta.label} <Text style={styles.legendPct}>{pct}%</Text>
+      </Text>
+    </View>
+  );
+}
+
+function IconBtn({
+  glyph,
+  label,
+  onPress,
+  active,
+  disabled,
+}: {
+  glyph: string;
+  label: string;
+  onPress?: () => void;
+  active?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <PressableScale
+      onPress={disabled ? undefined : onPress}
+      disabled={disabled}
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      style={[styles.iconBtn, active && styles.iconBtnActive, disabled && styles.iconBtnDisabled]}
+      scaleTo={0.9}
+    >
+      <Text style={styles.iconGlyph}>{glyph}</Text>
+    </PressableScale>
+  );
+}
+
+// One glanceable timeline block. Logged blocks get a solid surface + colored dot; empty blocks
+// stay quiet ("tap to log") so the day's real entries stand out. NOW is tinted + badged.
 function TimelineRow({
   slot,
   slotMs,
@@ -477,7 +527,6 @@ function TimelineRow({
   emoji,
   color,
   isNow,
-  selected,
   onPress,
 }: {
   slot: number;
@@ -486,35 +535,22 @@ function TimelineRow({
   emoji?: string;
   color?: string;
   isNow: boolean;
-  selected: boolean;
   onPress: () => void;
 }) {
-  const range = `${formatClock(slot)}–${formatClock(slot + slotMs)}`;
   const logged = label != null;
-  // Dot: accent for NOW, the category color (or teal for a custom entry) when logged, else the
-  // dim gap tone for an empty interval.
   const dotColor = isNow ? colors.accent : logged ? color ?? colors.teal : colors.gap;
-  const a11y = logged
-    ? `Edit ${formatClock(slot)}, logged as ${label}`
-    : `Log ${formatClock(slot)}`;
-
+  const a11y = logged ? `Edit ${formatClock(slot)}, logged as ${label}` : `Log ${formatClock(slot)}`;
   return (
     <PressableScale
       onPress={onPress}
       accessibilityLabel={a11y}
-      style={[
-        styles.row,
-        logged && styles.rowLogged,
-        isNow && styles.rowNow,
-        selected && styles.rowSelected,
-      ]}
+      style={[styles.row, logged && styles.rowLogged, isNow && styles.rowNow]}
       scaleTo={0.985}
     >
       <View style={styles.railCol}>
         <View style={styles.railLine} />
         <View style={[styles.railDot, { backgroundColor: dotColor }, isNow && styles.railDotNow]} />
       </View>
-
       <View style={styles.rowMain}>
         {logged ? (
           <View style={styles.rowLoggedLine}>
@@ -529,7 +565,6 @@ function TimelineRow({
           </Text>
         )}
       </View>
-
       <View style={styles.rowRight}>
         {isNow ? (
           <View style={styles.nowBadge}>
@@ -544,15 +579,28 @@ function TimelineRow({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  content: { paddingHorizontal: space.s3, gap: space.s3 },
+  content: { paddingHorizontal: space.s3, gap: space.s2 },
 
-  header: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between" },
-  kicker: { color: colors.accent },
-  headerDate: { color: colors.muted, fontWeight: "700" },
-
-  overlayBanner: {
-    flexDirection: "row",
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  headerLeft: { flex: 1 },
+  kicker: { color: colors.accent, marginBottom: 2 },
+  headerDate: { color: colors.fg },
+  headerActions: { flexDirection: "row", gap: space.s1 },
+  iconBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
     alignItems: "center",
+    justifyContent: "center",
+  },
+  iconBtnActive: { backgroundColor: colors.accentSoft, borderColor: colors.accentLine },
+  iconBtnDisabled: { opacity: 0.4 },
+  iconGlyph: { fontSize: 18, color: colors.fg2 },
+
+  banner: {
     backgroundColor: colors.accentSoft,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.accentLine,
@@ -560,79 +608,73 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.s2,
     paddingVertical: space.s1 + 2,
   },
-  overlayBannerText: { ...type.caption, color: colors.accent2, fontWeight: "700", flex: 1 },
+  bannerText: { ...type.caption, color: colors.accent2, fontWeight: "700" },
 
-  // two summary boxes
-  boxRow: { flexDirection: "row", gap: space.s2 },
-  boxWrap: { flex: 1 },
-  box: { paddingVertical: space.s2, gap: 4, minHeight: 118, justifyContent: "flex-start" },
-  boxKicker: { color: colors.muted },
-  boxValue: { color: colors.fg, marginTop: 2 },
-  boxSub: { color: colors.fg2 },
-  boxEdit: { ...type.caption, color: colors.accent, fontWeight: "700", marginTop: "auto" },
-  catDots: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5, marginTop: 2 },
-  catDot: { width: 11, height: 11, borderRadius: 6 },
-  catMore: { ...type.caption, color: colors.muted, fontWeight: "700", marginLeft: 2 },
+  pausedPill: {
+    backgroundColor: colors.accentSoft,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accentLine,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1,
+    alignItems: "center",
+  },
+  pausedPillText: { ...type.caption, color: colors.accent2, fontWeight: "700" },
 
-  // snooze
-  snoozeRow: {
+  // catch-up
+  catchUp: { paddingVertical: space.s2, gap: space.s1 },
+  catchUpTitle: { ...type.subheading, color: colors.accent2 },
+  catchUpSub: { ...type.caption, color: colors.fg2 },
+  catchUpChips: { flexDirection: "row", flexWrap: "wrap", gap: space.s1, marginTop: space.s0 },
+  catchUpChip: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: colors.surface2,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-    paddingHorizontal: space.s2,
-    paddingVertical: space.s1 + 4,
-  },
-  snoozeRowText: { color: colors.fg2 },
-  snoozeChevron: { color: colors.muted, fontSize: 14, fontWeight: "800" },
-  snoozeOptions: { flexDirection: "row", flexWrap: "wrap", gap: space.s1, marginTop: space.s1 },
-  snoozeChip: {
-    paddingHorizontal: space.s2,
+    gap: 5,
+    paddingHorizontal: space.s1 + 2,
     paddingVertical: space.s1,
     borderRadius: radius.pill,
     backgroundColor: colors.surface2,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.line,
   },
-  snoozeChipText: { color: colors.fg2, fontWeight: "700", fontSize: 14 },
-  snoozePaused: {
+  catchUpEmoji: { fontSize: 15 },
+  catchUpChipText: { color: colors.fg2, fontWeight: "700", fontSize: 13, maxWidth: 120 },
+  catchUpHint: { ...type.caption, color: colors.muted, marginTop: space.s0 },
+
+  // hero
+  hero: { paddingVertical: space.s3, gap: space.s1 },
+  streakRow: { marginBottom: space.s0 },
+  streakText: { ...type.bodyStrong, color: colors.accent2 },
+  heroValue: { fontSize: 52, lineHeight: 56, fontWeight: "800", color: colors.fg, letterSpacing: -1 },
+  heroCaption: { ...type.caption, color: colors.muted, marginTop: 2 },
+  heroEmpty: { gap: space.s1 },
+  splitBar: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: space.s2,
-    gap: space.s2,
-  },
-  snoozePausedText: { flex: 1 },
-  snoozePausedTitle: { color: colors.accent2 },
-  snoozePausedSub: { color: colors.muted, marginTop: 2 },
-  resumeBtn: {
-    paddingHorizontal: space.s2,
-    paddingVertical: space.s1,
+    height: 14,
     borderRadius: radius.pill,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.gap,
+    overflow: "hidden",
+    marginTop: space.s2,
   },
-  resumeText: { color: colors.onAccent, fontWeight: "800", fontSize: 14 },
+  legend: { flexDirection: "row", flexWrap: "wrap", gap: space.s2, marginTop: space.s2 },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendText: { ...type.caption, color: colors.fg2, fontWeight: "600" },
+  legendPct: { color: colors.fg, fontWeight: "800" },
 
-  entryHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: space.s1,
-  },
-  entryHeaderText: { color: colors.fg2 },
-  cancel: { color: colors.muted, fontSize: 13, fontWeight: "700" },
+  // verdict
+  verdict: { gap: space.s0, marginTop: space.s1 },
+  verdictHeadline: { color: colors.fg },
+  verdictSub: { color: colors.fg2 },
 
-  timeline: { gap: space.s0 },
+  // timeline
+  timeline: { gap: space.s0, marginTop: space.s1 },
   timelineLabel: { color: colors.muted, marginBottom: space.s1 },
   empty: { alignItems: "center", paddingVertical: space.s4, gap: space.s1 },
   emptyIcon: { fontSize: 30, marginBottom: space.s0 },
   emptyTitle: { color: colors.fg },
   emptyBody: { color: colors.muted, textAlign: "center", maxWidth: 260 },
 
-  // One flat interval row: slim left rail (continuous line + dot), content, right-aligned time.
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -644,68 +686,55 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.s1,
     marginBottom: 2,
   },
-  // Logged rows get a solid surface so they pop; empty rows stay transparent + quiet.
   rowLogged: { backgroundColor: colors.surface, borderColor: colors.line },
   rowNow: { backgroundColor: colors.accentSoft, borderColor: colors.accentLine },
-  rowSelected: { borderColor: colors.accent },
-
   railCol: { width: 16, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
   railLine: { position: "absolute", top: 0, bottom: 0, width: 2, backgroundColor: colors.line },
-  railDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    borderWidth: 2,
-    borderColor: colors.bg,
-  },
+  railDot: { width: 9, height: 9, borderRadius: 5, borderWidth: 2, borderColor: colors.bg },
   railDotNow: { width: 12, height: 12, borderRadius: 6 },
-
   rowMain: { flex: 1, minWidth: 0 },
   rowLoggedLine: { flexDirection: "row", alignItems: "center", gap: space.s1 },
   rowEmoji: { fontSize: 16 },
   rowLabel: { color: colors.fg, flexShrink: 1 },
   rowEmptyText: { color: colors.gapText },
   rowNowText: { color: colors.accent2, fontWeight: "700" },
-
   rowRight: { flexDirection: "row", alignItems: "center", gap: space.s1 },
   rowTime: { color: colors.fg2, fontVariant: ["tabular-nums"] },
-
-  earlierNote: {
-    ...type.caption,
-    color: colors.muted,
-    textAlign: "center",
-    marginTop: space.s1,
-  },
-
-  nowBadge: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.pill,
-    paddingHorizontal: space.s1,
-    paddingVertical: 2,
-  },
+  earlierNote: { ...type.caption, color: colors.muted, textAlign: "center", marginTop: space.s1 },
+  nowBadge: { backgroundColor: colors.accent, borderRadius: radius.pill, paddingHorizontal: space.s1, paddingVertical: 2 },
   nowBadgeText: { color: colors.onAccent, fontSize: 10, fontWeight: "800", letterSpacing: 0.6 },
 
-  // working-hours modal
-  modalScrim: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "center",
-    padding: space.s3,
-  },
-  modalCard: {
+  // bottom sheets (log + pause)
+  sheetScrim: { flex: 1, justifyContent: "flex-end" },
+  sheetBackdrop: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.6)" },
+  sheet: {
     backgroundColor: colors.surface,
-    borderRadius: radius.xl,
+    borderTopLeftRadius: radius.xxl,
+    borderTopRightRadius: radius.xxl,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.lineStrong,
-    padding: space.s3,
+    paddingHorizontal: space.s3,
+    paddingTop: space.s2,
+    gap: space.s2,
   },
-  modalTitle: { color: colors.fg, marginBottom: space.s0 },
-  modalSub: { color: colors.muted, marginBottom: space.s2 },
-  modalFieldCard: { gap: space.s0 },
-  modalDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.line,
-    marginVertical: space.s0,
+  sheetHandle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.lineStrong,
+    marginBottom: space.s1,
   },
-  modalActions: { marginTop: space.s3 },
+  sheetTitle: { color: colors.fg },
+  sheetSub: { color: colors.muted, marginTop: -space.s1 },
+  pauseGrid: { flexDirection: "row", flexWrap: "wrap", gap: space.s1 },
+  pauseChip: {
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1 + 2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+  },
+  pauseChipText: { color: colors.fg2, fontWeight: "700", fontSize: 15 },
 });

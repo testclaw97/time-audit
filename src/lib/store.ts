@@ -214,6 +214,30 @@ export async function logEntry(
   return next;
 }
 
+/** Catch-up: log the SAME activity across many slots at once (one write, one re-render) — used
+ *  to fill a run of missed blocks after you've been away. Empty text clears them all. `category`
+ *  (a Category.id) is stored when the fill came from a chip. */
+export async function logManyEntries(
+  slotStarts: number[],
+  text: string,
+  category?: string,
+): Promise<Entries> {
+  const clean = text.trim();
+  const ts = Date.now();
+  const next: Entries = { ...state.entries };
+  for (const slot of slotStarts) {
+    const key = String(slotStartFor(slot));
+    if (clean.length === 0) {
+      delete next[key];
+    } else {
+      next[key] = category !== undefined ? { text: clean, ts, category } : { text: clean, ts };
+    }
+  }
+  setState({ entries: next });
+  await persistEntries(next);
+  return next;
+}
+
 export async function clearAllEntries(): Promise<void> {
   setState({ entries: {} });
   await persistEntries({});

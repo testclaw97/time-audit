@@ -73,7 +73,14 @@ type EditorState =
 
 type Perms = { overlay: boolean; exact: boolean; fsi: boolean; battery: boolean };
 
-export default function SettingsScreen({ onReset }: { onReset: () => void }) {
+export default function SettingsScreen({
+  onReset,
+  onClose,
+}: {
+  onReset: () => void;
+  /** Close the Settings modal (App.tsx wires this to the header "Done" button). */
+  onClose?: () => void;
+}) {
   const insets = useSafeAreaInsets();
   const { settings } = useStore();
   const [scheduled, setScheduled] = useState<number | null>(null);
@@ -297,6 +304,14 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
       ]}
       showsVerticalScrollIndicator={false}
     >
+      {onClose ? (
+        <View style={styles.topBar}>
+          <PressableScale onPress={onClose} accessibilityLabel="Close settings" style={styles.doneBtn} scaleTo={0.95}>
+            <Text style={styles.doneText}>‹ Done</Text>
+          </PressableScale>
+        </View>
+      ) : null}
+
       <FadeIn>
         <Text style={[type.label, styles.kicker]}>SETTINGS</Text>
         <Text style={[type.title, styles.title]}>Tune your audit</Text>
@@ -774,6 +789,14 @@ function CategoryEditor({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: space.s3, gap: space.s2 },
+  topBar: { flexDirection: "row", alignItems: "center", marginBottom: space.s0 },
+  doneBtn: {
+    paddingVertical: space.s1,
+    paddingHorizontal: space.s2,
+    marginLeft: -space.s2,
+    borderRadius: radius.pill,
+  },
+  doneText: { ...type.subheading, color: colors.accent, fontWeight: "800" },
   kicker: { color: colors.accent, marginBottom: 2 },
   title: { color: colors.fg, marginBottom: space.s1 },
   sectionLabel: { color: colors.muted, marginTop: space.s2, marginBottom: space.s1 },
