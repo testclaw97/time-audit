@@ -108,6 +108,19 @@ class TimePingModule : Module() {
             }
         }
 
+        /**
+         * Read-and-clear the slot the user tapped "Other" for (0 if none). JS calls this on cold
+         * start / foreground; a non-zero result means open Today's quick-entry for that slot so the
+         * user can type their custom label — the slot the "Other" chip was asking about.
+         */
+        AsyncFunction("consumeLaunchSlot") {
+            try {
+                PingStore.takeFocusSlot(context)
+            } catch (_: Throwable) {
+                0L
+            }
+        }
+
         // --- special-access permission gates (each is a Settings bounce) -----------------
         AsyncFunction("hasExactAlarm") {
             try {

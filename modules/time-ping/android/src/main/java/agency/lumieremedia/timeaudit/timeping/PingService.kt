@@ -378,6 +378,9 @@ class PingService : Service() {
     /** "Other": record the sentinel (JS opens a custom-label prompt on drain) + open the app. */
     private fun onOther(slotStart: Long) {
         try {
+            // Stash the slot so JS can open quick-entry for it once the app is foregrounded (the
+            // launch-intent extra below isn't readable from RN; this focus-slot delivers the slot).
+            PingStore.setFocusSlot(this, slotStart)
             PingStore.addPendingLog(this, slotStart, ChooserUi.OTHER_SENTINEL, System.currentTimeMillis())
             val launch = packageManager.getLaunchIntentForPackage(packageName)
             if (launch != null) {

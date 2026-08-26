@@ -85,6 +85,13 @@ export interface TimePingModule {
   /** Fire the chooser NOW (Settings "Test the popup" + e2e). slotStart = now floored to interval. */
   triggerTestPing(): Promise<void>;
   /**
+   * Read-and-clear the slot the user tapped "Other" for on the full-screen chooser (0 = none).
+   * Call on cold start / foreground: a non-zero result means the user chose "Other" from the popup
+   * (locked or in-use) and the app should open Today's quick-entry for that slot so they can type a
+   * custom label. Without consuming this, an "Other" tap opens the app to nothing and the label is lost.
+   */
+  consumeLaunchSlot(): Promise<number>;
+  /**
    * Is the persistent native ping engine (PingService, the always-on foreground service) currently
    * alive? True while tracking is on and the OS hasn't killed the process. Lets the app surface
    * engine health (e.g. a "tracking is running" indicator, or a nudge to grant battery exemption

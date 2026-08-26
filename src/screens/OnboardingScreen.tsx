@@ -63,9 +63,11 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const windowMinutes = (sleep - wake + 24 * 60) % (24 * 60) || 24 * 60;
   const pingsPerDay = Math.floor(windowMinutes / interval);
 
-  // The three 100%-essential grants that make the popup fire at all. On web/iOS the special-access
-  // perms don't exist, so refreshPerms marks overlay/exact satisfied and only notifications gates.
-  const essentialsGranted = notifGranted && overlayGranted && exactGranted;
+  // Notifications is the ONE hard-required grant: it's the floor every check-in rides on (the
+  // native engine ALWAYS posts a notification, then upgrades to overlay/FSI when available). Overlay
+  // + exact-alarm are strong RECOMMENDATIONS, not blockers — a user who declines them still gets
+  // notification check-ins, so gating on them would only risk locking people out (TJ, 2026-08-26).
+  const essentialsGranted = notifGranted;
   const isOem = OEM_BRANDS.test(manufacturer);
   const brand = manufacturer
     ? manufacturer.charAt(0).toUpperCase() + manufacturer.slice(1)
@@ -231,8 +233,8 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
         <FadeIn delay={110}>
           <Card tone="accent" style={styles.promise}>
             <Text style={[type.body, styles.promiseText]}>
-              These are required — without them the check-in can't pop up at all. Grant each one,
-              then you're in.
+              One tap to allow notifications and you're in. The two below aren't required — they just
+              make the check-in a full-screen popup instead of a notification.
             </Text>
           </Card>
         </FadeIn>
@@ -252,10 +254,15 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
               actionLabel={notifCanAskAgain ? "Allow" : "Open settings"}
               testID="allow-notifications"
             />
-            <View style={styles.permDivider} />
+          </Card>
+        </FadeIn>
+
+        <FadeIn delay={200}>
+          <Text style={[type.label, styles.sectionLabel]}>RECOMMENDED</Text>
+          <Card style={styles.permStatusCard} tone="flat">
             <PermRow
               title="Display over other apps"
-              note="Lets the popup cover your screen while you're using the phone."
+              note="Makes the check-in a full-screen popup while you're using the phone. Without it, it's a notification."
               granted={overlayGranted}
               onAllow={allowOverlay}
               testID="allow-overlay"
@@ -263,12 +270,13 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
             <View style={styles.permDivider} />
             <PermRow
               title="Exact alarms"
-              note="Lets the check-in fire on time, not whenever Android feels like it."
+              note="Fires the check-in right on time. Without it, it can arrive a few minutes late."
               granted={exactGranted}
               onAllow={allowExact}
               testID="allow-exact"
             />
           </Card>
+          <Text style={styles.hint}>Optional — you can turn these on now or later in Settings.</Text>
         </FadeIn>
 
         <FadeIn delay={230}>

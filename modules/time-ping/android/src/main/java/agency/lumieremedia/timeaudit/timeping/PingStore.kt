@@ -104,6 +104,7 @@ object PingStore {
     private const val KEY_SLEEP = "sleep"
     private const val KEY_PAUSED_UNTIL = "paused_until" // epoch-ms; pings before this are suppressed
     private const val KEY_LOCK_SCREEN_POPUP = "lock_screen_popup" // Boolean; gate the FSI over keyguard
+    private const val KEY_FOCUS_SLOT = "focus_slot" // epoch-ms of a slot the user tapped "Other" for
 
     // Fallback schedule params if something reads before the first schedule() call.
     const val DEFAULT_INTERVAL = 15
@@ -340,6 +341,32 @@ object PingStore {
 
     /** Snooze horizon (epoch-ms). 0 = no active snooze. Read by fire() + the scheduler. */
     fun getPausedUntil(ctx: Context): Long = prefs(ctx).getLong(KEY_PAUSED_UNTIL, 0L)
+
+    // --- "Other" focus slot (chooser -> app custom-label handoff) -----------------------
+    // When the user taps the "Other" chip (locked path: PingActivity; unlocked: PingService) we
+    // open the app so they can type a custom label — but the app needs to know WHICH slot. We stash
+    // the slot here and JS reads-and-clears it on foreground (TimePing.consumeLaunchSlot) to open
+    // Today's quick-entry for that slot. Without this the "Other" tap opened the app to nothing and
+    // the custom label was silently lost.
+
+    /** Remember the slot the user tapped "Other" for, so JS can open its quick-entry on foreground. */
+    fun setFocusSlot(ctx: Context, slotStart: Long) {
+        synchronized(lock) {
+            prefs(ctx).edit().putLong(KEY_FOCUS_SLOT, slotStart).apply()
+        }
+    }
+
+    /**
+     * Read-and-clear the pending "Other" focus slot (0 if none), atomically so it's delivered to JS
+     * exactly once. JS consumes this on cold start / foreground to open quick-entry for that slot.
+     */
+    fun takeFocusSlot(ctx: Context): Long {
+        synchronized(lock) {
+            val v = prefs(ctx).getLong(KEY_FOCUS_SLOT, 0L)
+            if (v != 0L) prefs(ctx).edit().remove(KEY_FOCUS_SLOT).apply()
+            return v
+        }
+    }
 
     /**
      * Whether a LOCKED-screen ping is allowed to take over the keyguard with the full-screen

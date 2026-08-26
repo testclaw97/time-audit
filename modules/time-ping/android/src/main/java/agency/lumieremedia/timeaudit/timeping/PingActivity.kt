@@ -110,6 +110,9 @@ class PingActivity : Activity() {
     /** "Other" → open the app's launcher so the user can type a custom label for this slot. */
     private fun openAppForOther() {
         try {
+            // Stash the slot so JS can open quick-entry for it on foreground (the launch-intent
+            // extra below isn't readable from RN; this focus-slot is what actually delivers the slot).
+            PingStore.setFocusSlot(this, slotStart)
             PingStore.addPendingLog(this, slotStart, ChooserUi.OTHER_SENTINEL, System.currentTimeMillis())
             val launch = packageManager.getLaunchIntentForPackage(packageName)
             if (launch != null) {

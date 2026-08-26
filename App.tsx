@@ -84,6 +84,21 @@ async function armPings(s: Settings): Promise<void> {
   await reschedulePings(s);
 }
 
+// Consume any "Other" focus slot the native chooser stashed: when the user taps "Other" on the
+// full-screen popup (locked or in-use), native opens the app and stows the slot; we read-and-clear
+// it here so Today can open quick-entry for exactly that slot. Returns the slotStart, or null when
+// there's nothing pending / on web/iOS. Guarded so it can never crash bootstrap or a foreground.
+async function consumeLaunchSlot(): Promise<number | null> {
+  if (!isAvailable() || !TimePing) return null;
+  try {
+    const slot = await TimePing.consumeLaunchSlot();
+    return typeof slot === "number" && slot > 0 ? slot : null;
+  } catch (e) {
+    console.warn("[app] consumeLaunchSlot failed", e);
+    return null;
+  }
+}
+
 type Tab = "today" | "insights" | "settings";
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
@@ -106,6 +121,12 @@ function Root() {
       await hydrate();
       await setupNotificationChannels();
       await armPings(getState().settings);
+      // If the app was cold-started by an "Other" tap on the popup, land on that slot's entry.
+      const slot = await consumeLaunchSlot();
+      if (slot != null) {
+        setFocusSlot(slot);
+        setTab("today");
+      }
     })();
   }, []);
 
@@ -145,7 +166,17 @@ function Root() {
   // window. armPings handles the native (drain + schedule/cancel) vs expo (reschedule) branch.
   useEffect(() => {
     const onChange = (next: AppStateStatus) => {
-      if (next === "active") void armPings(getState().settings);
+      if (next === "active") {
+        void armPings(getState().settings);
+        // An "Other" tap that opened the app while it was already running lands here — focus the slot.
+        void (async () => {
+          const slot = await consumeLaunchSlot();
+          if (slot != null) {
+            setFocusSlot(slot);
+            setTab("today");
+          }
+        })();
+      }
     };
     const sub = AppState.addEventListener("change", onChange);
     return () => sub.remove();
