@@ -204,6 +204,9 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
         wakeMinutes: wake,
         sleepMinutes: sleep,
         intervalMinutes: interval,
+        // Stamp when tracking began so the home's catch-up doesn't count blocks from before the
+        // app existed (a fresh install mid-day would otherwise say "you've been away 11h").
+        trackingStartedAt: Date.now(),
       });
       await reschedulePings(next);
     } catch (e) {

@@ -67,7 +67,10 @@ export default function TodayScreen({
   const [fsiNeeded, setFsiNeeded] = useState(false);
 
   const paused = settings.pausedUntil > nowMs;
-  const permNeeded = overlayNeeded || fsiNeeded;
+  // Nudge only when a NEEDED grant is missing: overlay is required (in-use popup); FSI is only
+  // needed if the user WANTS lock-screen popups (that toggle is on). Otherwise the popup works
+  // fine and the banner shouldn't nag.
+  const permNeeded = overlayNeeded || (fsiNeeded && settings.lockScreenPopup);
 
   // Keep the timeline + "now" live.
   useEffect(() => {
@@ -171,14 +174,20 @@ export default function TodayScreen({
   // Catch-up: the run of consecutive unlogged blocks ending at NOW — i.e. what you missed while
   // you were away. One category tap fills the whole gap (see catchUpFill). Only surfaced at ≥2.
   const trailingGap = useMemo(() => {
+    const startBoundary =
+      settings.trackingStartedAt > 0 ? slotStartFor(settings.trackingStartedAt) : 0;
     const g: number[] = [];
     for (let i = slots.length - 1; i >= 0; i--) {
       const s = slots[i];
       if (entries[String(s)]?.text?.trim()) break;
+      // Don't offer to "catch up" blocks from before tracking began (fresh install mid-day), and
+      // cap the run so a very long absence stays a sensible one-tap fill rather than a huge claim.
+      if (s < startBoundary) break;
       g.push(s);
+      if (g.length >= 24) break;
     }
     return g.reverse(); // ascending
-  }, [slots, entries]);
+  }, [slots, entries, settings.trackingStartedAt]);
   const gapMinutes = trailingGap.length * slotMin;
 
   const catchUpFill = (cat: Category) => {

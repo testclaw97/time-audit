@@ -43,6 +43,7 @@ export interface Settings {
   pausedUntil: number; // epoch ms popups are snoozed until; 0 = not paused
   lockScreenPopup: boolean; // show the full-screen popup over the LOCK SCREEN (default true; a choice)
   oemSetupConfirmed: boolean; // user confirmed they enabled the OEM (MIUI/Samsung) extra switches
+  trackingStartedAt: number; // epoch ms tracking began; catch-up ignores blocks before this (0 = unset)
 }
 
 export interface Entry {
@@ -80,6 +81,7 @@ const DEFAULT_SETTINGS: Settings = {
   pausedUntil: 0,
   lockScreenPopup: true,
   oemSetupConfirmed: false,
+  trackingStartedAt: 0,
 };
 
 interface State {
