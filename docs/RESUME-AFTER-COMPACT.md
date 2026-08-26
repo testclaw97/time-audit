@@ -1,3 +1,32 @@
+# RESUME AFTER COMPACT — Time Audit
+
+## ▶ CURRENT STATE (2026-08-26 late eve) — v0.4.0 RELEASED; next = Google Play production
+- **v2 "The Truth" redesign is DONE, merged to `master`, tagged `v0.4.0`, GitHub release live**
+  (https://github.com/testclaw97/time-audit/releases/tag/v0.4.0, APK attached). Fully verified
+  end-to-end on a FRESH install on the real Poco F5 (MIUI): onboarding + mandatory permission gate,
+  popup fires on schedule (tested 30s + 1m), home/insights/nav, catch-up, and the feedback button →
+  TJ's Telegram. Phone currently left running at the 1-minute test interval.
+- **Feedback pipeline LIVE:** app → `https://lumieremedia.agency/timeaudit/feedback` (PM2
+  `timeaudit-feedback` :4023, nginx+Cloudflare) → TJ's Telegram. No email anywhere.
+- **NEXT TASK (TJ asked, resume here): execute `docs/PLAY-STORE-READINESS.md`** — the plan to get
+  to production on Google Play. **START AT PHASE 0** (de-risk the FGS/FSI/exact-alarm permission
+  model against Play policy — it can force an architecture change, so it gates everything). Then
+  Phases 1–5. Ask TJ the 4 open questions in that doc (Play account? monetization? name? timeline?)
+  before deep work.
+- **MIUI device-testing landmines (don't relearn the hard way):** fresh `pm install` after uninstall
+  → `INSTALL_FAILED_USER_RESTRICTED` (MIUI "Install via USB"); use `pm install -i com.android.vending`
+  spoof OR serve the APK over Tailscale (`python3 -m http.server --bind 100.123.255.8`, dir
+  `~/infra/timeaudit-feedback/serve/`) → Brave downloads → tap "Download complete" notif → Install.
+  `pm install -r` UPDATES are unrestricted, so prefer `pm clear` over uninstall for a "fresh" state.
+  The wireless-debug port ROTATES on any screen/system-UI change (re-read the 5-digit port each time);
+  `appops SYSTEM_ALERT_WINDOW/USE_FULL_SCREEN_INTENT allow` does NOT flip MIUI's real
+  canDrawOverlays/canUseFullScreenIntent — toggle the real "Display over other apps" + "Full screen
+  notifications" switches; `appops set ... SYSTEM_ALERT_WINDOW ignore` temporarily to stop overlay
+  popups while UI-testing.
+- Full history of the v0.3.1/v2 work is below (kept for reference).
+
+---
+
 # RESUME AFTER COMPACT — Time Audit (2026-08-26)
 
 ## UPDATE — 2026-08-26 PM (while TJ walking): v0.3.1 JS finished + reviewed + fixed, CI green
