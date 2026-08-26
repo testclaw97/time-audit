@@ -36,13 +36,23 @@ object PingScheduler {
      * alarm first and re-uses the one [PingStore.REQ_CHAIN] slot). Returns 1 if an alarm was armed,
      * else 0 (e.g. an all-suppressed window, or no AlarmManager).
      */
-    fun schedule(ctx: Context, intervalMin: Int, wakeMin: Int, sleepMin: Int, pausedUntilMs: Long = 0L): Int {
+    fun schedule(
+        ctx: Context,
+        intervalMin: Int,
+        wakeMin: Int,
+        sleepMin: Int,
+        pausedUntilMs: Long = 0L,
+        lockScreenPopup: Boolean = PingStore.DEFAULT_LOCK_SCREEN_POPUP
+    ): Int {
         // Clamp the interval so a corrupt value can't zero the step (divide-by-zero) or spin.
         val interval = if (intervalMin in 1..1440) intervalMin else PingStore.DEFAULT_INTERVAL
         val wake = ((wakeMin % 1440) + 1440) % 1440
         val sleep = ((sleepMin % 1440) + 1440) % 1440
 
-        PingStore.saveParams(ctx, interval, wake, sleep, pausedUntilMs)
+        // Persist lockScreenPopup alongside the cadence params so PingService.render (which may run
+        // with no JS process) can gate the lock-screen full-screen intent, and BootReceiver can
+        // restore the user's choice after a reboot.
+        PingStore.saveParams(ctx, interval, wake, sleep, pausedUntilMs, lockScreenPopup)
 
         // Bring up (or keep up) the persistent engine. Guarded inside PingService.send — if an OEM
         // refuses the FGS start here, we still arm the alarm below and the first fire retries the

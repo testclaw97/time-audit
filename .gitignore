@@ -40,3 +40,6 @@ yarn-error.*
 /ios
 /android
 *.png
+
+# real-device test artifacts (screenshots/logs)
+_device-test/

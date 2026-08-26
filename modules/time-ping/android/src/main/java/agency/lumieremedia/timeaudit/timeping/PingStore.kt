@@ -103,11 +103,15 @@ object PingStore {
     private const val KEY_WAKE = "wake"
     private const val KEY_SLEEP = "sleep"
     private const val KEY_PAUSED_UNTIL = "paused_until" // epoch-ms; pings before this are suppressed
+    private const val KEY_LOCK_SCREEN_POPUP = "lock_screen_popup" // Boolean; gate the FSI over keyguard
 
     // Fallback schedule params if something reads before the first schedule() call.
     const val DEFAULT_INTERVAL = 15
     private const val DEFAULT_WAKE = 7 * 60   // 07:00
     private const val DEFAULT_SLEEP = 23 * 60 // 23:00
+    // Default for the lock-screen popup: ON. A locked-screen ping takes over the keyguard with the
+    // full-screen chooser unless the user explicitly opts out (then it degrades to the floor notice).
+    const val DEFAULT_LOCK_SCREEN_POPUP = true
 
     // A guard so any reads/writes that touch the same key don't interleave across threads
     // (the module runs on Expo's async executor; receivers on the main thread).
@@ -274,13 +278,21 @@ object PingStore {
      * [pausedUntilMs] is the snooze horizon (epoch-ms): pings whose fire time is at/before it are
      * suppressed. 0 (the default) means "no snooze active".
      */
-    fun saveParams(ctx: Context, intervalMin: Int, wakeMin: Int, sleepMin: Int, pausedUntilMs: Long = 0L) {
+    fun saveParams(
+        ctx: Context,
+        intervalMin: Int,
+        wakeMin: Int,
+        sleepMin: Int,
+        pausedUntilMs: Long = 0L,
+        lockScreenPopup: Boolean = DEFAULT_LOCK_SCREEN_POPUP
+    ) {
         synchronized(lock) {
             prefs(ctx).edit()
                 .putInt(KEY_INTERVAL, intervalMin)
                 .putInt(KEY_WAKE, wakeMin)
                 .putInt(KEY_SLEEP, sleepMin)
                 .putLong(KEY_PAUSED_UNTIL, pausedUntilMs)
+                .putBoolean(KEY_LOCK_SCREEN_POPUP, lockScreenPopup)
                 .apply()
         }
     }
@@ -296,6 +308,16 @@ object PingStore {
     /** Snooze horizon (epoch-ms). 0 = no active snooze. Read by fire() + the scheduler. */
     fun getPausedUntil(ctx: Context): Long = prefs(ctx).getLong(KEY_PAUSED_UNTIL, 0L)
 
+    /**
+     * Whether a LOCKED-screen ping is allowed to take over the keyguard with the full-screen
+     * chooser. Read by [PingService.render] to decide whether to attach setFullScreenIntent on the
+     * locked branch; when false the locked ping stays just the floor notification. Defaults to ON
+     * ([DEFAULT_LOCK_SCREEN_POPUP]) so a store written before this key existed keeps the old
+     * full-screen-over-lock behaviour. Does NOT affect the unlocked/overlay branch.
+     */
+    fun getLockScreenPopup(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_LOCK_SCREEN_POPUP, DEFAULT_LOCK_SCREEN_POPUP)
+
     /** Wipe the stored params (called on cancelAll) so a reboot won't resurrect the pings. */
     fun clearParams(ctx: Context) {
         synchronized(lock) {
@@ -304,6 +326,7 @@ object PingStore {
                 .remove(KEY_WAKE)
                 .remove(KEY_SLEEP)
                 .remove(KEY_PAUSED_UNTIL)
+                .remove(KEY_LOCK_SCREEN_POPUP)
                 .apply()
         }
     }

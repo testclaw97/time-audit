@@ -37,7 +37,11 @@ class TimePingModule : Module() {
                 val sleep = intOf(opts["sleepMinutes"], 23 * 60)
                 // Snooze horizon (epoch-ms). JS sends a Double; absent/invalid → 0 (no snooze).
                 val pausedUntil = longOf(opts["pausedUntilMs"], 0L)
-                PingScheduler.schedule(context, interval, wake, sleep, pausedUntil)
+                // Lock-screen popup: JS Boolean; absent/invalid → true (default ON). When false a
+                // LOCKED-screen ping degrades to the floor notification instead of taking over the
+                // keyguard with the full-screen chooser (see PingService.render).
+                val lockScreenPopup = boolOf(opts["lockScreenPopup"], true)
+                PingScheduler.schedule(context, interval, wake, sleep, pausedUntil, lockScreenPopup)
             } catch (_: Throwable) {
                 0
             }
@@ -197,6 +201,97 @@ class TimePingModule : Module() {
             } catch (_: Throwable) {
             }
         }
+
+        // --- OEM proprietary switches (MIUI / One UI / ColorOS / FuntouchOS / EMUI) ------------
+        // These are NOT standard Android permissions: they live in the OEM's own security app, and
+        // standard APIs can neither grant NOR read them. The ONLY thing we can do is deep-link the
+        // user straight to the right OEM screen and let them flip the toggle by hand. Proven on a
+        // real Xiaomi: enabling MIUI's "Display pop-up windows while running in the background" +
+        // "Show on lock screen" + autostart is what actually makes the background popup fire.
+
+        /**
+         * Build.MANUFACTURER lowercased ("xiaomi", "samsung", "oppo", "vivo", "huawei", …) so JS
+         * can show the correct OEM-specific onboarding step + wording. Empty string on any failure.
+         */
+        AsyncFunction("getManufacturer") {
+            try {
+                Build.MANUFACTURER?.lowercase() ?: ""
+            } catch (_: Throwable) {
+                ""
+            }
+        }
+
+        /**
+         * Open the OEM's per-app "other permissions" editor — the screen that hosts MIUI's "Display
+         * pop-up windows while running in the background" and "Show on lock screen" ops, which no
+         * standard Android permission covers. We try the known OEM editors in order (first that
+         * RESOLVES on this device wins) and fall back to the universal app-details settings page.
+         * We cannot READ the resulting state (OEM-private), so the app relies on the user confirming
+         * they enabled them. Fully guarded — a bad deep-link must never crash the host app.
+         */
+        AsyncFunction("openOemAppPermissions") {
+            try {
+                val pkg = context.packageName
+                // MIUI (Xiaomi/Redmi/POCO): the permission editor is an action + explicit component,
+                // and it needs the target package passed via the OEM-specific "extra_pkgname" extra.
+                val miui = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                    setClassName(
+                        "com.miui.securitycenter",
+                        "com.miui.permcenter.permissions.PermissionsEditorActivity"
+                    )
+                    putExtra("extra_pkgname", pkg)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                launchFirstResolvable(listOf(miui))
+            } catch (_: Throwable) {
+            }
+        }
+
+        /**
+         * Open the OEM's autostart / auto-launch manager — the switch that lets our process be
+         * (re)started in the background after an OEM kill, which is what keeps the alarm chain and
+         * the persistent service alive on aggressive skins. Try each vendor's known component in
+         * order (first that resolves wins), else fall back to app-details settings. Guarded.
+         */
+        AsyncFunction("openOemAutostart") {
+            try {
+                launchFirstResolvable(
+                    listOf(
+                        // MIUI (Xiaomi/Redmi/POCO)
+                        oemComponent(
+                            "com.miui.securitycenter",
+                            "com.miui.permcenter.autostart.AutoStartManagementActivity"
+                        ),
+                        // Samsung One UI — newer "Device care" battery screen …
+                        oemComponent(
+                            "com.samsung.android.lool",
+                            "com.samsung.android.sm.ui.battery.BatteryActivity"
+                        ),
+                        // … and the older Smart Manager "Auto run" list.
+                        oemComponent(
+                            "com.samsung.android.sm",
+                            "com.samsung.android.sm.ui.ram.AutoRunActivity"
+                        ),
+                        // Oppo / Realme / OnePlus (ColorOS) startup manager.
+                        oemComponent(
+                            "com.coloros.safecenter",
+                            "com.coloros.safecenter.permission.startup.StartupAppListActivity"
+                        ),
+                        // Vivo / iQOO (FuntouchOS/OriginOS) background-startup manager.
+                        oemComponent(
+                            "com.vivo.permissionmanager",
+                            "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"
+                        ),
+                        // Huawei / Honor (EMUI) startup manager.
+                        oemComponent(
+                            "com.huawei.systemmanager",
+                            "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
+                        )
+                    )
+                )
+            } catch (_: Throwable) {
+            }
+        }
     }
 
     // --- helpers -----------------------------------------------------------------------
@@ -228,9 +323,68 @@ class TimePingModule : Module() {
         else -> fallback
     }
 
+    /**
+     * Coerce a JS Boolean (or a "true"/"false"/1/0 stand-in) into a Kotlin Boolean, falling back to
+     * [fallback] on null/anything unrecognised — so an absent `lockScreenPopup` opt reads as ON.
+     */
+    private fun boolOf(value: Any?, fallback: Boolean): Boolean = when (value) {
+        is Boolean -> value
+        is Number -> value.toDouble() != 0.0
+        is String -> when (value.trim().lowercase()) {
+            "true", "1", "yes" -> true
+            "false", "0", "no" -> false
+            else -> fallback
+        }
+        else -> fallback
+    }
+
     /** A module Context is NOT an Activity, so NEW_TASK is required to start a Settings screen. */
     private fun launchSettings(intent: Intent) {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
+    }
+
+    /**
+     * Build an explicit intent at an OEM security-app component, carrying the target package via
+     * BOTH the OEM-specific "extra_pkgname" extra (some skins key their screen off it) and
+     * FLAG_ACTIVITY_NEW_TASK (the module Context isn't an Activity). Harmless where the extra is
+     * ignored.
+     */
+    private fun oemComponent(pkg: String, cls: String): Intent =
+        Intent().apply {
+            setClassName(pkg, cls)
+            putExtra("extra_pkgname", context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+    /**
+     * Try each OEM deep-link in order and launch the FIRST one that actually resolves to an activity
+     * on THIS device (resolveActivity != null) — most candidates belong to other vendors' security
+     * apps and simply won't resolve. If none resolve (or every launch throws), fall back to the
+     * always-present per-app details settings page so the user still lands somewhere useful. Every
+     * step is guarded: a proprietary screen that exists but refuses our start must not crash the app.
+     */
+    private fun launchFirstResolvable(intents: List<Intent>) {
+        val pm = context.packageManager
+        for (intent in intents) {
+            try {
+                if (intent.resolveActivity(pm) != null) {
+                    context.startActivity(intent)
+                    return
+                }
+            } catch (_: Throwable) {
+                // This candidate blew up (e.g. an OEM restricting the component) — try the next.
+            }
+        }
+        // FINAL fallback: the universal app-details settings screen. Always resolvable.
+        try {
+            launchSettings(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:${context.packageName}")
+                )
+            )
+        } catch (_: Throwable) {
+        }
     }
 }

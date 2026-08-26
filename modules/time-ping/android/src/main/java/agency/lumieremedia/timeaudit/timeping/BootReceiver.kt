@@ -42,7 +42,10 @@ class BootReceiver : BroadcastReceiver() {
                 PingStore.getWake(context),
                 PingStore.getSleep(context),
                 // Carry the snooze horizon across reboot so a paused audit stays paused.
-                PingStore.getPausedUntil(context)
+                PingStore.getPausedUntil(context),
+                // Carry the lock-screen popup choice across reboot so a locked-screen ping keeps
+                // (or keeps NOT) taking over the keyguard exactly as the user set it.
+                PingStore.getLockScreenPopup(context)
             )
         } catch (_: Throwable) {
             // Never crash during boot.

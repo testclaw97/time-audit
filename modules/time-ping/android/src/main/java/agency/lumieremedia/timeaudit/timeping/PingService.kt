@@ -180,10 +180,17 @@ class PingService : Service() {
 
             val useOverlay = canOverlay && interactive && !locked
 
-            // a + c. Always post the floor; attach the FSI ONLY when we're NOT drawing the overlay
-            // (i.e. the locked / screen-off / no-overlay case), so the notice can launch
-            // PingActivity over the keyguard where an overlay window cannot reach.
-            postCheckinNotification(slotStart, withFullScreen = !useOverlay)
+            // Lock-screen popup preference: does the user allow a LOCKED-screen ping to take over the
+            // keyguard with the full-screen chooser? Read from the persisted params (this may run with
+            // no JS process). Defaults ON. Only gates the locked branch; the overlay branch is
+            // unaffected (it never attaches an FSI anyway).
+            val lockScreenPopup = try { PingStore.getLockScreenPopup(this) } catch (_: Throwable) { true }
+
+            // a + c. Always post the floor. Attach the FSI ONLY on the locked / screen-off / no-overlay
+            // case (!useOverlay) AND only when the user permits a lock-screen takeover. When the popup
+            // is disabled a locked-screen ping stays just the floor notification — no full-screen
+            // takeover of the keyguard — while the unlocked/overlay branch below is untouched.
+            postCheckinNotification(slotStart, withFullScreen = !useOverlay && lockScreenPopup)
 
             // b. Unlocked & in use & permitted → also draw the overlay window from this live svc.
             if (useOverlay) {

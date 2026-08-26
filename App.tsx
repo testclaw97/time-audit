@@ -67,6 +67,9 @@ async function armPings(s: Settings): Promise<void> {
           // Snooze: the scheduler skips boundaries before this instant and the receiver stays
           // silent until it passes, so pausing popups needs no separate native call.
           pausedUntilMs: s.pausedUntil,
+          // Whether the full-screen chooser is allowed over the LOCK SCREEN (optional toggle); when
+          // off, a locked-screen ping stays a notification and the chooser waits until the phone's in use.
+          lockScreenPopup: s.lockScreenPopup,
         });
       } else {
         await TimePing.cancelAll();
@@ -164,6 +167,7 @@ function Root() {
     settings.sleepMinutes,
     settings.tracking,
     settings.pausedUntil, // pausing/resuming popups re-arms the schedule
+    settings.lockScreenPopup, // toggling lock-screen popup re-arms with the new flag
   ]);
 
   if (!ready) {

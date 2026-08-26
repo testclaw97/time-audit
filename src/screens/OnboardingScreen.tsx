@@ -4,11 +4,10 @@
 // The onDone wiring (onboarded/tracking via updateSettings, then reschedule) is preserved.
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  Alert,
   AppState,
-  Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from "react-native";
@@ -19,9 +18,10 @@ import Button from "../ui/Button";
 import FadeIn from "../ui/FadeIn";
 import TimeField from "../ui/TimeField";
 import PressableScale from "../ui/PressableScale";
-import { updateSettings } from "../lib/store";
+import { updateSettings, useStore } from "../lib/store";
 import TimePing, { isAvailable } from "../../modules/time-ping";
 import {
+  getPermissionStatus,
   requestPermission,
   reschedulePings,
   setupNotificationChannels,
@@ -29,115 +29,164 @@ import {
 import { formatDuration } from "../lib/time";
 
 const INTERVALS = [5, 10, 15, 20, 30, 45, 60] as const;
+// OEM skins (Xiaomi/MIUI, Samsung, …) hide extra pop-up / autostart / battery switches that
+// standard Android permissions DON'T cover — the popup is silently blocked until they're on.
+const OEM_BRANDS = /xiaomi|redmi|poco|samsung|oppo|realme|oneplus|vivo|huawei|honor/;
 
 export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const insets = useSafeAreaInsets();
+  const { settings } = useStore();
   const [wake, setWake] = useState(7 * 60);
   const [sleep, setSleep] = useState(23 * 60);
   const [interval, setInterval] = useState(15);
   const [busy, setBusy] = useState(false);
-  // Two-step flow: "intro" collects the window/interval and arms pings; "permission" asks for
-  // the TWO grants that power the popup — overlay (cover the screen while in use) and
-  // full-screen-intent (appear over the LOCK SCREEN). Step 2 only ever appears on a native
-  // Android build where at least one of the two is actually missing.
+  // Two-step flow: "intro" collects the window/interval; "permission" is a MANDATORY gate. The
+  // finish CTA stays locked until the three ESSENTIAL grants (notifications + overlay + exact
+  // alarms) are green, and — on an OEM skin (Xiaomi/Samsung/…) — until the user confirms the extra
+  // switches. The lock-screen popup itself is an OPTIONAL toggle on this screen.
   const [step, setStep] = useState<"intro" | "permission">("intro");
+  const [notifGranted, setNotifGranted] = useState(false);
   const [overlayGranted, setOverlayGranted] = useState(false);
+  const [exactGranted, setExactGranted] = useState(false);
   const [fsiGranted, setFsiGranted] = useState(false);
-  const bothGranted = overlayGranted && fsiGranted;
+  const [manufacturer, setManufacturer] = useState("");
 
   const windowMinutes = (sleep - wake + 24 * 60) % (24 * 60) || 24 * 60;
   const pingsPerDay = Math.floor(windowMinutes / interval);
 
-  // Re-check BOTH grants on entering step 2 + whenever we return to the foreground (the user
-  // grants them in a system Settings screen, so the values flip off-screen).
+  // The three 100%-essential grants that make the popup fire at all. On web/iOS the special-access
+  // perms don't exist, so refreshPerms marks overlay/exact satisfied and only notifications gates.
+  const essentialsGranted = notifGranted && overlayGranted && exactGranted;
+  const isOem = OEM_BRANDS.test(manufacturer);
+  const brand = manufacturer
+    ? manufacturer.charAt(0).toUpperCase() + manufacturer.slice(1)
+    : "phone";
+  // On an OEM device the user must also confirm they flipped the MIUI/Samsung switches — the app
+  // physically can't read those ops, so confirmation is the only signal we get.
+  const canFinish = essentialsGranted && (!isOem || settings.oemSetupConfirmed);
+
+  // Re-check every gate on entering step 2 + whenever we return to the foreground (the user grants
+  // them in system Settings screens, so the values flip while we're backgrounded).
   const refreshPerms = useCallback(async () => {
-    if (!isAvailable() || !TimePing) return;
     try {
-      const [overlay, fsi] = await Promise.all([
-        TimePing.hasOverlayPermission(),
-        TimePing.hasFullScreenIntent(),
-      ]);
-      setOverlayGranted(overlay);
-      setFsiGranted(fsi);
+      const status = await getPermissionStatus();
+      setNotifGranted(status === "granted" || status === "web");
     } catch (e) {
-      console.warn("[onboarding] refreshPerms failed", e);
+      console.warn("[onboarding] notif status failed", e);
+    }
+    if (isAvailable() && TimePing) {
+      try {
+        const [overlay, exact, fsi] = await Promise.all([
+          TimePing.hasOverlayPermission(),
+          TimePing.hasExactAlarm(),
+          TimePing.hasFullScreenIntent(),
+        ]);
+        setOverlayGranted(overlay);
+        setExactGranted(exact);
+        setFsiGranted(fsi);
+      } catch (e) {
+        console.warn("[onboarding] refreshPerms failed", e);
+      }
+    } else {
+      // web / iOS: no overlay / exact-alarm / FSI special access — don't block the gate on them.
+      setOverlayGranted(true);
+      setExactGranted(true);
+      setFsiGranted(true);
     }
   }, []);
 
   useEffect(() => {
     if (step !== "permission") return;
     refreshPerms();
+    void (async () => {
+      if (isAvailable() && TimePing) {
+        try {
+          setManufacturer((await TimePing.getManufacturer()) || "");
+        } catch (e) {
+          console.warn("[onboarding] getManufacturer failed", e);
+        }
+      }
+    })();
     const sub = AppState.addEventListener("change", (s) => {
       if (s === "active") refreshPerms();
     });
     return () => sub.remove();
   }, [step, refreshPerms]);
 
-  const start = async () => {
+  // Intro CTA → set up channels, fire the notification prompt up front, then advance to the gate.
+  // We do NOT persist onboarded here — that happens only in finish(), once every gate is green.
+  const goToPermissions = async () => {
     setBusy(true);
     try {
       await setupNotificationChannels();
-      const granted = await requestPermission();
-      const settings = await updateSettings({
+      await requestPermission();
+    } catch (e) {
+      console.warn("[onboarding] channel/permission setup failed", e);
+    } finally {
+      setBusy(false);
+      setStep("permission");
+    }
+  };
+
+  const allowNotifications = async () => {
+    try {
+      await requestPermission();
+    } catch (e) {
+      console.warn("[onboarding] requestPermission failed", e);
+    }
+    refreshPerms();
+  };
+
+  // Run a guarded native request, then re-check (the grant lands in a system screen; refreshPerms
+  // also fires on AppState 'active').
+  const runNative = async (fn: () => Promise<void>, label: string) => {
+    if (!isAvailable() || !TimePing) return;
+    try {
+      await fn();
+    } catch (e) {
+      console.warn(`[onboarding] ${label} failed`, e);
+    }
+    refreshPerms();
+  };
+
+  const allowOverlay = () =>
+    runNative(() => TimePing!.requestOverlayPermission(), "requestOverlayPermission");
+  const allowExact = () => runNative(() => TimePing!.requestExactAlarm(), "requestExactAlarm");
+  const allowFsi = () =>
+    runNative(() => TimePing!.requestFullScreenIntent(), "requestFullScreenIntent");
+  const allowBattery = () =>
+    runNative(() => TimePing!.requestBatteryExemption(), "requestBatteryExemption");
+  const openOemPerms = () =>
+    runNative(() => TimePing!.openOemAppPermissions(), "openOemAppPermissions");
+  const openAutostart = () => runNative(() => TimePing!.openOemAutostart(), "openOemAutostart");
+
+  const setLockScreen = (v: boolean) => {
+    void updateSettings({ lockScreenPopup: v });
+  };
+  const toggleOemConfirmed = () => {
+    void updateSettings({ oemSetupConfirmed: !settings.oemSetupConfirmed });
+  };
+
+  // Finish: NOW persist onboarded/tracking + the window/interval and (re)arm pings. Setting
+  // onboarded flips App back to the tabs; onDone() lands the user on Today.
+  const finish = async () => {
+    if (!canFinish) return;
+    setBusy(true);
+    try {
+      const next = await updateSettings({
         onboarded: true,
         tracking: true,
         wakeMinutes: wake,
         sleepMinutes: sleep,
         intervalMinutes: interval,
       });
-      await reschedulePings(settings);
-      if (!granted && Platform.OS !== "web") {
-        Alert.alert(
-          "Notifications are off",
-          `Time Audit needs notification permission to pop up every ${interval} minutes. You can still log inside the app, and enable pings later in Settings.`,
-        );
-      }
-      // On a native Android build, if EITHER popup grant is missing, don't silently finish —
-      // advance to the permission step. Never block: any failure just finishes.
-      let needPerm = false;
-      if (isAvailable() && TimePing) {
-        try {
-          const [overlay, fsi] = await Promise.all([
-            TimePing.hasOverlayPermission(),
-            TimePing.hasFullScreenIntent(),
-          ]);
-          needPerm = !overlay || !fsi;
-        } catch (e) {
-          console.warn("[onboarding] permission check failed", e);
-        }
-      }
-      if (needPerm) {
-        setStep("permission");
-      } else {
-        onDone();
-      }
+      await reschedulePings(next);
     } catch (e) {
-      console.warn("[onboarding] start failed", e);
-      onDone();
+      console.warn("[onboarding] finish failed", e);
     } finally {
       setBusy(false);
+      onDone();
     }
-  };
-
-  const requestOverlay = async () => {
-    if (!isAvailable() || !TimePing) return;
-    try {
-      await TimePing.requestOverlayPermission();
-    } catch (e) {
-      console.warn("[onboarding] requestOverlayPermission failed", e);
-    }
-    // The grant lands in a system screen; refreshPerms also fires on AppState 'active'.
-    refreshPerms();
-  };
-
-  const requestFsi = async () => {
-    if (!isAvailable() || !TimePing) return;
-    try {
-      await TimePing.requestFullScreenIntent();
-    } catch (e) {
-      console.warn("[onboarding] requestFullScreenIntent failed", e);
-    }
-    refreshPerms();
   };
 
   if (step === "permission") {
@@ -151,62 +200,148 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
         showsVerticalScrollIndicator={false}
       >
         <FadeIn>
-          <Text style={styles.kicker}>ONE LAST THING</Text>
+          <Text style={styles.kicker}>ALMOST THERE</Text>
           <Text style={[type.display, styles.title]}>
-            Let the popup{"\n"}cover your screen.
+            Make the popup{"\n"}actually fire.
           </Text>
         </FadeIn>
 
         <FadeIn delay={110}>
           <Card tone="accent" style={styles.promise}>
             <Text style={[type.body, styles.promiseText]}>
-              Android needs two permissions so the check-in can pop up over whatever you're
-              doing — and even over your lock screen.
+              These are required — without them the check-in can't pop up at all. Grant each one,
+              then you're in.
             </Text>
           </Card>
         </FadeIn>
 
-        <FadeIn delay={180}>
+        <FadeIn delay={170}>
+          <Text style={[type.label, styles.sectionLabel]}>REQUIRED</Text>
           <Card style={styles.permStatusCard} tone="flat">
             <PermRow
-              title="Show over other apps"
+              title="Notifications"
+              note="Lets the check-in reach you every interval."
+              granted={notifGranted}
+              onAllow={allowNotifications}
+              testID="allow-notifications"
+            />
+            <View style={styles.permDivider} />
+            <PermRow
+              title="Display over other apps"
               note="Lets the popup cover your screen while you're using the phone."
               granted={overlayGranted}
-              onAllow={requestOverlay}
+              onAllow={allowOverlay}
               testID="allow-overlay"
             />
             <View style={styles.permDivider} />
             <PermRow
-              title="Show on the lock screen"
-              note="Lets the popup appear even when your phone is locked."
-              granted={fsiGranted}
-              onAllow={requestFsi}
-              testID="allow-fsi"
+              title="Exact alarms"
+              note="Lets the check-in fire on time, not whenever Android feels like it."
+              granted={exactGranted}
+              onAllow={allowExact}
+              testID="allow-exact"
             />
           </Card>
         </FadeIn>
 
-        <FadeIn delay={260}>
-          {bothGranted ? (
-            <Button
-              label="You're all set"
-              icon="✓"
-              onPress={onDone}
-              style={styles.cta}
-              testID="onboarding-done"
-            />
-          ) : (
-            <PressableScale
-              onPress={onDone}
-              accessibilityLabel="Skip for now"
-              style={styles.skipRow}
-              testID="onboarding-skip"
-            >
-              <Text style={styles.skipText}>Skip for now</Text>
-            </PressableScale>
-          )}
+        <FadeIn delay={230}>
+          <Text style={[type.label, styles.sectionLabel]}>LOCK SCREEN</Text>
+          <Card tone="flat" style={styles.lockCard}>
+            <View style={styles.lockRow}>
+              <View style={styles.lockText}>
+                <Text style={[type.bodyStrong, styles.lockTitle]}>Show over the lock screen</Text>
+                <Text style={[type.caption, styles.lockNote]}>
+                  Off = it only pops up while you're using the phone.
+                </Text>
+              </View>
+              <Switch
+                value={settings.lockScreenPopup}
+                onValueChange={setLockScreen}
+                trackColor={{ true: colors.accent, false: colors.surface3 }}
+                thumbColor="#fff"
+                accessibilityLabel="Show over the lock screen"
+                testID="toggle-lockscreen"
+              />
+            </View>
+            {settings.lockScreenPopup ? (
+              <>
+                <View style={styles.permDivider} />
+                <PermRow
+                  title="Show on the lock screen"
+                  note="Lets the popup appear even when your phone is locked."
+                  granted={fsiGranted}
+                  onAllow={allowFsi}
+                  testID="allow-fsi"
+                />
+              </>
+            ) : null}
+          </Card>
+        </FadeIn>
+
+        {isOem ? (
+          <FadeIn delay={290}>
+            <Card tone="accent" style={styles.oemCard}>
+              <Text style={styles.oemBadge}>REQUIRED ON {brand.toUpperCase()}</Text>
+              <Text style={[type.heading, styles.oemTitle]}>
+                Your {brand} phone needs{"\n"}3 extra switches.
+              </Text>
+              <Text style={[type.body, styles.oemBody]}>
+                Android's normal permissions aren't enough on {brand} — without these, the popup is
+                silently blocked. Flip all three, then confirm below.
+              </Text>
+
+              <OemAction
+                n="1"
+                title="Pop-up & lock-screen permissions"
+                hint={'Turn ON "Display pop-up windows while running in the background" + "Show on lock screen".'}
+                onPress={openOemPerms}
+                testID="oem-app-permissions"
+              />
+              <OemAction
+                n="2"
+                title="Autostart"
+                hint="Enable Time Audit so it can wake itself to ping you."
+                onPress={openAutostart}
+                testID="oem-autostart"
+              />
+              <OemAction
+                n="3"
+                title="Battery: No restrictions"
+                hint="Stop the system from killing the ping engine in the background."
+                onPress={allowBattery}
+                testID="oem-battery"
+              />
+
+              <PressableScale
+                onPress={toggleOemConfirmed}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: settings.oemSetupConfirmed }}
+                accessibilityLabel="I've turned these on"
+                style={styles.checkRow}
+                testID="oem-confirm"
+              >
+                <View style={[styles.checkBox, settings.oemSetupConfirmed && styles.checkBoxOn]}>
+                  {settings.oemSetupConfirmed ? <Text style={styles.checkMark}>✓</Text> : null}
+                </View>
+                <Text style={[type.bodyStrong, styles.checkLabel]}>I've turned these on</Text>
+              </PressableScale>
+            </Card>
+          </FadeIn>
+        ) : null}
+
+        <FadeIn delay={350}>
+          <Button
+            label={busy ? "Finishing…" : canFinish ? "Start my audit" : "Grant the required permissions"}
+            icon={canFinish ? "▸" : undefined}
+            onPress={finish}
+            disabled={!canFinish || busy}
+            style={styles.cta}
+            testID="onboarding-done"
+          />
           <Text style={styles.privacy}>
-            You can fine-tune alarms & lock-screen access anytime in Settings.
+            {canFinish
+              ? "You can fine-tune all of this anytime in Settings."
+              : "Grant the required permissions to continue."}
           </Text>
         </FadeIn>
       </ScrollView>
@@ -292,7 +427,7 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
         <Button
           label={busy ? "Setting up…" : "Start my audit"}
           icon="▸"
-          onPress={start}
+          onPress={goToPermissions}
           disabled={busy}
           style={styles.cta}
           testID="start-tracking"
@@ -363,6 +498,39 @@ function PermRow({
       </View>
       <Text style={[type.caption, styles.permStatusNote]}>{note}</Text>
     </View>
+  );
+}
+
+function OemAction({
+  n,
+  title,
+  hint,
+  onPress,
+  testID,
+}: {
+  n: string;
+  title: string;
+  hint: string;
+  onPress: () => void;
+  testID?: string;
+}) {
+  return (
+    <PressableScale
+      onPress={onPress}
+      accessibilityLabel={title}
+      style={styles.oemAction}
+      scaleTo={0.98}
+      testID={testID}
+    >
+      <View style={styles.oemActionNum}>
+        <Text style={styles.oemActionNumText}>{n}</Text>
+      </View>
+      <View style={styles.oemActionText}>
+        <Text style={[type.bodyStrong, styles.oemActionTitle]}>{title}</Text>
+        <Text style={[type.caption, styles.oemActionHint]}>{hint}</Text>
+      </View>
+      <Text style={styles.oemActionArrow}>›</Text>
+    </PressableScale>
   );
 }
 
@@ -447,4 +615,61 @@ const styles = StyleSheet.create({
   permAllowText: { color: colors.accent, fontWeight: "800", fontSize: 13 },
   skipRow: { alignSelf: "center", paddingVertical: space.s2, marginTop: space.s0 },
   skipText: { ...type.bodyStrong, color: colors.muted },
+
+  // lock-screen optional toggle
+  lockCard: { gap: space.s1 },
+  lockRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.s2 },
+  lockText: { flex: 1 },
+  lockTitle: { color: colors.fg },
+  lockNote: { color: colors.muted, marginTop: 2 },
+
+  // OEM (Xiaomi/Samsung/…) mandatory setup card
+  oemCard: { gap: space.s1 },
+  oemBadge: {
+    ...type.label,
+    color: colors.accent,
+    marginBottom: space.s0,
+  },
+  oemTitle: { color: colors.fg, marginBottom: space.s0 },
+  oemBody: { color: colors.fg2, marginBottom: space.s1 },
+  oemAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s2,
+    backgroundColor: colors.surface2,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accentLine,
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1 + 2,
+  },
+  oemActionNum: {
+    width: 26,
+    height: 26,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  oemActionNumText: { color: colors.onAccent, fontSize: 13, fontWeight: "800" },
+  oemActionText: { flex: 1 },
+  oemActionTitle: { color: colors.fg },
+  oemActionHint: { color: colors.muted, marginTop: 2 },
+  oemActionArrow: { color: colors.accent, fontSize: 22, fontWeight: "800" },
+
+  // "I've turned these on" confirm
+  checkRow: { flexDirection: "row", alignItems: "center", gap: space.s2, paddingVertical: space.s1, marginTop: space.s0 },
+  checkBox: {
+    width: 26,
+    height: 26,
+    borderRadius: radius.sm,
+    borderWidth: 2,
+    borderColor: colors.accentLine,
+    backgroundColor: colors.surface2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkBoxOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+  checkMark: { color: colors.onAccent, fontSize: 15, fontWeight: "800" },
+  checkLabel: { color: colors.fg },
 });

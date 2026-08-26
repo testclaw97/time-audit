@@ -62,6 +62,25 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+      Package visibility for the OEM deep-links (TimePingModule.openOemAppPermissions /
+      openOemAutostart). On Android 11+ (targetSdk 30+) an app can no longer freely "see" other
+      packages, and Intent.resolveActivity() returns null for a package it can't see — which would
+      make our resolveActivity() guard fail on EVERY OEM security-app deep-link and silently fall
+      back to the plain app-details page, defeating the whole feature on exactly the Xiaomi/Samsung/
+      Oppo/Vivo/Huawei devices that need it. Declaring these packages here lets resolveActivity()
+      actually detect the vendor's security app when it's the one present, and is ignored on OSes
+      that don't have it. (We only ever START these components; we never read their data.)
+    -->
+    <queries>
+        <package android:name="com.miui.securitycenter" />      <!-- Xiaomi / Redmi / POCO (MIUI) -->
+        <package android:name="com.samsung.android.lool" />     <!-- Samsung One UI Device care -->
+        <package android:name="com.samsung.android.sm" />       <!-- Samsung Smart Manager (older) -->
+        <package android:name="com.coloros.safecenter" />       <!-- Oppo / Realme / OnePlus (ColorOS) -->
+        <package android:name="com.vivo.permissionmanager" />   <!-- Vivo / iQOO (FuntouchOS/OriginOS) -->
+        <package android:name="com.huawei.systemmanager" />     <!-- Huawei / Honor (EMUI) -->
+    </queries>
+
     <application>
         <!--
           The full-screen chooser. Launched by the FSI notification (and by the

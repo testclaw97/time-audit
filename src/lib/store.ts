@@ -41,6 +41,8 @@ export interface Settings {
   intervalMinutes: number; // ping cadence in minutes (default 15; 5/10/15/20/30/45/60)
   categories: Category[]; // user-editable category list (seeded with DEFAULT_CATEGORIES)
   pausedUntil: number; // epoch ms popups are snoozed until; 0 = not paused
+  lockScreenPopup: boolean; // show the full-screen popup over the LOCK SCREEN (default true; a choice)
+  oemSetupConfirmed: boolean; // user confirmed they enabled the OEM (MIUI/Samsung) extra switches
 }
 
 export interface Entry {
@@ -76,6 +78,8 @@ const DEFAULT_SETTINGS: Settings = {
   intervalMinutes: 15,
   categories: DEFAULT_CATEGORIES,
   pausedUntil: 0,
+  lockScreenPopup: true,
+  oemSetupConfirmed: false,
 };
 
 interface State {

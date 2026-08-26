@@ -43,6 +43,9 @@ import {
 import { formatClock, formatDuration } from "../lib/time";
 
 const INTERVALS = [5, 10, 15, 20, 30, 45, 60] as const;
+// OEM skins (Xiaomi/MIUI, Samsung, …) hide extra pop-up / autostart / battery switches that
+// standard Android permissions DON'T cover — the popup is silently blocked until they're on.
+const OEM_BRANDS = /xiaomi|redmi|poco|samsung|oppo|realme|oneplus|vivo|huawei|honor/;
 // Snooze presets for the "Pause popups" control (matches the Home screen).
 const SNOOZE_PRESETS = [
   { label: "30 min", ms: 30 * 60 * 1000 },
@@ -77,7 +80,13 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
   const [armed, setArmed] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [perms, setPerms] = useState<Perms>({ overlay: true, exact: true, fsi: true, battery: true });
+  const [engineRunning, setEngineRunning] = useState<boolean | null>(null);
+  const [manufacturer, setManufacturer] = useState("");
   const [showSnooze, setShowSnooze] = useState(false);
+  const isOem = OEM_BRANDS.test(manufacturer);
+  const brand = manufacturer
+    ? manufacturer.charAt(0).toUpperCase() + manufacturer.slice(1)
+    : "phone";
   // 1s heartbeat while paused so the "paused until …" line stays fresh and the control flips
   // back to "Pause popups" the moment the snooze expires.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -114,20 +123,33 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
   const refreshPerms = useCallback(async () => {
     if (!isAvailable() || !TimePing) return;
     try {
-      const [overlay, exact, fsi, battery] = await Promise.all([
+      const [overlay, exact, fsi, battery, engine] = await Promise.all([
         TimePing.hasOverlayPermission(),
         TimePing.hasExactAlarm(),
         TimePing.hasFullScreenIntent(),
         TimePing.hasBatteryExemption(),
+        TimePing.isEngineRunning(),
       ]);
       setPerms({ overlay, exact, fsi, battery });
+      setEngineRunning(engine);
     } catch (e) {
       console.warn("[settings] refreshPerms failed", e);
     }
   }, []);
 
+  // Re-check perms + engine health on mount and on every foreground (focus). Fetch the OEM brand
+  // once — it never changes for the life of the process.
   useEffect(() => {
     refreshPerms();
+    void (async () => {
+      if (isAvailable() && TimePing) {
+        try {
+          setManufacturer((await TimePing.getManufacturer()) || "");
+        } catch (e) {
+          console.warn("[settings] getManufacturer failed", e);
+        }
+      }
+    })();
     const sub = AppState.addEventListener("change", (s) => {
       if (s === "active") refreshPerms();
     });
@@ -243,6 +265,27 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
     }
     // The grant happens in a system screen; re-check will also fire on AppState 'active'.
     refreshPerms();
+  };
+
+  // OEM (Xiaomi/Samsung/…) extra switches: open the OEM screen, then re-check on return. The app
+  // can't read the MIUI ops directly, so these are best-effort bounces to the right settings page.
+  const runOem = async (fn: () => Promise<void>, label: string) => {
+    if (!isAvailable() || !TimePing) return;
+    try {
+      await fn();
+    } catch (e) {
+      console.warn(`[settings] ${label} failed`, e);
+    }
+    refreshPerms();
+  };
+  const openOemPerms = () =>
+    runOem(() => TimePing!.openOemAppPermissions(), "openOemAppPermissions");
+  const openAutostart = () => runOem(() => TimePing!.openOemAutostart(), "openOemAutostart");
+  const openOemBattery = () =>
+    runOem(() => TimePing!.requestBatteryExemption(), "requestBatteryExemption");
+
+  const toggleLockScreen = () => {
+    void updateSettings({ lockScreenPopup: !settings.lockScreenPopup });
   };
 
   return (
@@ -424,6 +467,44 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
         <Text style={styles.hint}>
           Fires in a few seconds — lock your phone now to test the lock-screen popup.
         </Text>
+
+        {native ? (
+          <Card tone="flat" style={styles.engineCard}>
+            <View style={styles.rowBetween}>
+              <View style={styles.rowText}>
+                <Text style={[type.bodyStrong, styles.rowTitle]}>
+                  Tracking engine:{" "}
+                  {engineRunning === null
+                    ? "checking…"
+                    : engineRunning
+                    ? "running ✓"
+                    : "not running"}
+                </Text>
+                {engineRunning === false ? (
+                  <Text style={[type.caption, styles.rowSub]}>
+                    Tap "Test the popup" above, or check battery / autostart below.
+                  </Text>
+                ) : null}
+              </View>
+              <Text style={engineRunning ? styles.engineOk : styles.engineBad}>
+                {engineRunning === null ? "…" : engineRunning ? "✓" : "!"}
+              </Text>
+            </View>
+          </Card>
+        ) : null}
+
+        <Card style={styles.lockToggleCard}>
+          <View style={styles.rowBetween}>
+            <View style={styles.rowText}>
+              <Text style={[type.bodyStrong, styles.rowTitle]}>Show over lock screen</Text>
+              <Text style={[type.caption, styles.rowSub]}>
+                Off = the popup only appears while you're using the phone.
+              </Text>
+            </View>
+            <Toggle value={settings.lockScreenPopup} onToggle={toggleLockScreen} />
+          </View>
+        </Card>
+
         {native ? (
           <Card style={styles.permCard}>
             <PermissionRow
@@ -456,6 +537,29 @@ export default function SettingsScreen({ onReset }: { onReset: () => void }) {
             The full-screen popup runs in the installed Android app.
           </Text>
         )}
+
+        {native && isOem ? (
+          <Card tone="accent" style={styles.oemCard}>
+            <Text style={styles.oemHeader}>{brand.toUpperCase()} EXTRA SWITCHES</Text>
+            <Text style={[type.caption, styles.oemBody]}>
+              Standard Android permissions aren't enough on {brand} — turn these on or the popup
+              gets silently blocked.
+            </Text>
+            <Button
+              label="Pop-up & lock-screen permissions"
+              variant="ghost"
+              onPress={openOemPerms}
+              testID="oem-app-permissions"
+            />
+            <Button label="Autostart" variant="ghost" onPress={openAutostart} testID="oem-autostart" />
+            <Button
+              label="Battery: No restrictions"
+              variant="ghost"
+              onPress={openOemBattery}
+              testID="oem-battery"
+            />
+          </Card>
+        ) : null}
       </FadeIn>
 
       <FadeIn delay={270}>
@@ -782,6 +886,15 @@ const styles = StyleSheet.create({
   addLabel: { color: colors.accent },
   resetRow: { alignSelf: "flex-start", paddingVertical: space.s1 },
   resetText: { ...type.caption, color: colors.muted, fontWeight: "700" },
+
+  // engine health + lock-screen toggle + OEM extra switches
+  engineCard: { marginTop: space.s1 },
+  engineOk: { color: colors.teal, fontSize: 18, fontWeight: "800" },
+  engineBad: { color: colors.accent, fontSize: 18, fontWeight: "800" },
+  lockToggleCard: { marginTop: space.s1 },
+  oemCard: { marginTop: space.s1, gap: space.s1 },
+  oemHeader: { ...type.label, color: colors.accent },
+  oemBody: { color: colors.fg2, marginBottom: space.s0 },
 
   // permissions
   permCard: { marginTop: space.s1, gap: space.s0 },

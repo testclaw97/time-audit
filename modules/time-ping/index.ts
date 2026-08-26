@@ -63,6 +63,9 @@ export interface TimePingModule {
     /** Epoch ms until which popups are snoozed. 0 / omitted = not paused. The scheduler skips
      *  boundaries before this instant and the receiver stays silent until it passes. */
     pausedUntilMs?: number;
+    /** Show the full-screen popup over the LOCK SCREEN (default true). When false, a locked-screen
+     *  ping stays the notification floor and the chooser only appears once the phone is in use. */
+    lockScreenPopup?: boolean;
   }): Promise<number>;
   /** Cancel every scheduled ping alarm (used when tracking is turned off). */
   cancelAll(): Promise<void>;
@@ -100,6 +103,18 @@ export interface TimePingModule {
   hasBatteryExemption(): Promise<boolean>;
   /** Open ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS for our package. */
   requestBatteryExemption(): Promise<void>;
+
+  // --- OEM (Xiaomi/MIUI, Samsung, …) extra switches that standard Android perms DON'T cover ---
+  /** Build.MANUFACTURER lowercased ("xiaomi", "samsung", …) so the app can show the right OEM step. */
+  getManufacturer(): Promise<string>;
+  /** Open the OEM's per-app "other permissions" screen (MIUI APP_PERM_EDITOR — where "Display
+   *  pop-up windows while running in the background" + "Show on lock screen" live). Falls back to
+   *  the app-details settings page. Best-effort; the app can't read these MIUI ops, so it relies on
+   *  the user confirming they enabled them. */
+  openOemAppPermissions(): Promise<void>;
+  /** Open the OEM autostart manager (MIUI AutoStartManagementActivity / Samsung / Oppo / etc.).
+   *  Falls back to app-details settings. */
+  openOemAutostart(): Promise<void>;
 }
 
 // `null` on web / iOS (no native module registered), the real module on Android.
