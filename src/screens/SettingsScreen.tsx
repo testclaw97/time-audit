@@ -42,8 +42,8 @@ import {
 } from "../lib/notifications";
 import { formatClock, formatDuration } from "../lib/time";
 
-// 0.5 = a 30-second cadence for fast testing (pings every 30s); the rest are minutes.
-const INTERVALS = [0.5, 5, 10, 15, 20, 30, 45, 60] as const;
+// 0.5/1/2 = fast test cadences (30s / 1min / 2min); the rest are the normal minute options.
+const INTERVALS = [0.5, 1, 2, 5, 10, 15, 20, 30, 45, 60] as const;
 /** Chip / a11y label for an interval in minutes: "30s" for sub-minute, else "15m". */
 const intervalLabel = (m: number) => (m < 1 ? `${Math.round(m * 60)}s` : `${m}m`);
 // OEM skins (Xiaomi/MIUI, Samsung, …) hide extra pop-up / autostart / battery switches that
