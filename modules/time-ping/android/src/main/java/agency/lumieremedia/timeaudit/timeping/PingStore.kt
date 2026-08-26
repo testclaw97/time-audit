@@ -314,7 +314,7 @@ object PingStore {
      */
     fun saveParams(
         ctx: Context,
-        intervalMin: Int,
+        intervalMin: Float,
         wakeMin: Int,
         sleepMin: Int,
         pausedUntilMs: Long = 0L,
@@ -322,7 +322,7 @@ object PingStore {
     ) {
         synchronized(lock) {
             prefs(ctx).edit()
-                .putInt(KEY_INTERVAL, intervalMin)
+                .putFloat(KEY_INTERVAL, intervalMin) // Float: supports sub-minute test cadences (30s)
                 .putInt(KEY_WAKE, wakeMin)
                 .putInt(KEY_SLEEP, sleepMin)
                 .putLong(KEY_PAUSED_UNTIL, pausedUntilMs)
@@ -335,7 +335,14 @@ object PingStore {
     fun hasParams(ctx: Context): Boolean =
         prefs(ctx).contains(KEY_INTERVAL)
 
-    fun getInterval(ctx: Context): Int = prefs(ctx).getInt(KEY_INTERVAL, DEFAULT_INTERVAL)
+    /** Interval in minutes as a Float (supports sub-minute test cadences, e.g. 0.5 = 30s). Guarded:
+     *  a store written by an older build put an Int under this key — getFloat would throw on that,
+     *  so fall back to the default rather than crash. */
+    fun getInterval(ctx: Context): Float = try {
+        prefs(ctx).getFloat(KEY_INTERVAL, DEFAULT_INTERVAL.toFloat())
+    } catch (_: Throwable) {
+        DEFAULT_INTERVAL.toFloat()
+    }
     fun getWake(ctx: Context): Int = prefs(ctx).getInt(KEY_WAKE, DEFAULT_WAKE)
     fun getSleep(ctx: Context): Int = prefs(ctx).getInt(KEY_SLEEP, DEFAULT_SLEEP)
 

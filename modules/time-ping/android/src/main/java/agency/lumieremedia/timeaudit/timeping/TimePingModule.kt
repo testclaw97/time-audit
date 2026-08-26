@@ -32,7 +32,8 @@ class TimePingModule : Module() {
         // --- scheduling ------------------------------------------------------------------
         AsyncFunction("schedule") { opts: Map<String, Any?> ->
             try {
-                val interval = intOf(opts["intervalMinutes"], PingStore.DEFAULT_INTERVAL)
+                // Float minutes so a sub-minute test cadence (0.5 = 30s) survives the JS→native hop.
+                val interval = floatOf(opts["intervalMinutes"], PingStore.DEFAULT_INTERVAL.toFloat())
                 val wake = intOf(opts["wakeMinutes"], 7 * 60)
                 val sleep = intOf(opts["sleepMinutes"], 23 * 60)
                 // Snooze horizon (epoch-ms). JS sends a Double; absent/invalid → 0 (no snooze).
@@ -330,6 +331,17 @@ class TimePingModule : Module() {
             if (d.isFinite()) d.toLong().toInt() else fallback
         }
         is String -> value.trim().toDoubleOrNull()?.toInt() ?: fallback
+        else -> fallback
+    }
+
+    /** Coerce a JS numeric (Double) — or a String — into a Float minute value (keeps fractions,
+     *  e.g. 0.5 for a 30-second interval). Falls back on anything non-finite. */
+    private fun floatOf(value: Any?, fallback: Float): Float = when (value) {
+        is Number -> {
+            val d = value.toDouble()
+            if (d.isFinite()) d.toFloat() else fallback
+        }
+        is String -> value.trim().toDoubleOrNull()?.toFloat() ?: fallback
         else -> fallback
     }
 

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import java.util.Calendar
+import kotlin.math.roundToInt
 
 /**
  * The AlarmManager brain — now ALARM-ONLY and SELF-RESCHEDULING (one alarm at a time, re-armed on
@@ -36,16 +37,21 @@ object PingScheduler {
      * alarm first and re-uses the one [PingStore.REQ_CHAIN] slot). Returns 1 if an alarm was armed,
      * else 0 (e.g. an all-suppressed window, or no AlarmManager).
      */
+    // Interval is a FLOAT of minutes so sub-minute cadences work (e.g. 0.5 = a 30-second test
+    // interval). Clamped to [MIN_INTERVAL_MIN, 1440]; whole-minute values behave exactly as before.
+    const val MIN_INTERVAL_MIN = 0.25f // 15s floor — Android won't reliably fire exact alarms faster
+
     fun schedule(
         ctx: Context,
-        intervalMin: Int,
+        intervalMin: Float,
         wakeMin: Int,
         sleepMin: Int,
         pausedUntilMs: Long = 0L,
         lockScreenPopup: Boolean = PingStore.DEFAULT_LOCK_SCREEN_POPUP
     ): Int {
         // Clamp the interval so a corrupt value can't zero the step (divide-by-zero) or spin.
-        val interval = if (intervalMin in 1..1440) intervalMin else PingStore.DEFAULT_INTERVAL
+        val interval = if (intervalMin in MIN_INTERVAL_MIN..1440f) intervalMin
+                       else PingStore.DEFAULT_INTERVAL.toFloat()
         val wake = ((wakeMin % 1440) + 1440) % 1440
         val sleep = ((sleepMin % 1440) + 1440) % 1440
 
@@ -103,7 +109,8 @@ object PingScheduler {
      */
     fun triggerTestPing(ctx: Context) {
         val interval = PingStore.getInterval(ctx)
-        val stepMs = (if (interval in 1..1440) interval else PingStore.DEFAULT_INTERVAL) * 60_000L
+        val safe = if (interval in MIN_INTERVAL_MIN..1440f) interval else PingStore.DEFAULT_INTERVAL.toFloat()
+        val stepMs = (safe * 60_000f).toLong()
         val now = System.currentTimeMillis()
         val slotStart = (now / stepMs) * stepMs
 
@@ -113,7 +120,7 @@ object PingScheduler {
             PingService.render(ctx, slotStart, isTest = true)
             return
         }
-        val intent = buildFireIntent(ctx, slotStart, interval, PingStore.getWake(ctx), PingStore.getSleep(ctx))
+        val intent = buildFireIntent(ctx, slotStart, safe.roundToInt(), PingStore.getWake(ctx), PingStore.getSleep(ctx))
             .apply { putExtra(PingStore.EXTRA_TEST, true) }
         val pi = broadcastPI(ctx, PingStore.REQ_TEST, intent)
         val fireAt = now + 4_000L
@@ -134,11 +141,11 @@ object PingScheduler {
      */
     private fun armNextBoundary(ctx: Context, am: AlarmManager, requestCode: Int): Boolean {
         val rawInterval = PingStore.getInterval(ctx)
-        val interval = if (rawInterval in 1..1440) rawInterval else PingStore.DEFAULT_INTERVAL
+        val interval = if (rawInterval in MIN_INTERVAL_MIN..1440f) rawInterval else PingStore.DEFAULT_INTERVAL.toFloat()
         val wake = PingStore.getWake(ctx)
         val sleep = PingStore.getSleep(ctx)
         val pausedUntil = PingStore.getPausedUntil(ctx)
-        val stepMs = interval * 60_000L
+        val stepMs = (interval * 60_000f).toLong()
 
         val now = System.currentTimeMillis()
         // First boundary strictly AFTER now, epoch-aligned — matches JS slotStartFor(from)+step.
@@ -146,8 +153,10 @@ object PingScheduler {
 
         // Bound the search to a day of steps + headroom so an empty/all-suppressed window can't
         // spin. When a snooze is active the next ping may be past today, so extend by the pause.
+        // (In practice the first candidate is in-window, so this loops once; the cap only matters
+        // for a fully-suppressed window. At a 30s test interval the cap is ~2900 — still cheap.)
         val pauseSteps = if (pausedUntil > now) ((pausedUntil - now) / stepMs).toInt() + 2 else 0
-        val maxSteps = (1440 / maxOf(1, interval)) + 8 + pauseSteps
+        val maxSteps = (1440f / maxOf(MIN_INTERVAL_MIN, interval)).toInt() + 8 + pauseSteps
         var i = 0
         while (i < maxSteps) {
             // SNOOZE: skip any boundary at/before the pause horizon — render() would no-op it
@@ -158,7 +167,7 @@ object PingScheduler {
                     requestCode = requestCode,
                     fireTime = t,
                     slotStart = t - stepMs,
-                    interval = interval, wake = wake, sleep = sleep
+                    interval = interval.roundToInt(), wake = wake, sleep = sleep
                 )
                 return true
             }

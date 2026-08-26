@@ -29,7 +29,10 @@ import {
 } from "../lib/notifications";
 import { formatDuration } from "../lib/time";
 
-const INTERVALS = [5, 10, 15, 20, 30, 45, 60] as const;
+// 0.5 = a 30-second cadence for fast testing (pings every 30s); the rest are minutes.
+const INTERVALS = [0.5, 5, 10, 15, 20, 30, 45, 60] as const;
+/** Chip / a11y label for an interval in minutes: "30s" for sub-minute, else "15m". */
+const intervalLabel = (m: number) => (m < 1 ? `${Math.round(m * 60)}s` : `${m}m`);
 // OEM skins (Xiaomi/MIUI, Samsung, …) hide extra pop-up / autostart / battery switches that
 // standard Android permissions DON'T cover — the popup is silently blocked until they're on.
 const OEM_BRANDS = /xiaomi|redmi|poco|samsung|oppo|realme|oneplus|vivo|huawei|honor/;
@@ -436,12 +439,12 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
                 key={m}
                 onPress={() => setInterval(m)}
                 accessibilityRole="button"
-                accessibilityLabel={`Every ${m} minutes`}
+                accessibilityLabel={m < 1 ? `Every ${Math.round(m * 60)} seconds` : `Every ${m} minutes`}
                 accessibilityState={{ selected: active }}
                 scaleTo={0.94}
                 style={[styles.chip, active && styles.chipActive]}
               >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{m}m</Text>
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{intervalLabel(m)}</Text>
                 {m === 15 ? (
                   <View style={styles.badge}>
                     <Text style={styles.badgeText}>HORMOZI</Text>

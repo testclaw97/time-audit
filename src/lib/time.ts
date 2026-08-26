@@ -22,7 +22,9 @@ let SLOT_MS_CURRENT = SLOT_MINUTES * 60 * 1000; // derived, kept in lock-step
  *  whenever the user changes `settings.intervalMinutes`. Ignores non-finite / non-positive
  *  input (falls back to the 15-min default) so a corrupt setting can never zero the grid. */
 export function configureSlotMinutes(min: number): void {
-  const safe = Number.isFinite(min) && min > 0 ? Math.floor(min) : 15;
+  // Allow FRACTIONAL minutes (e.g. 0.5 = a 30-second test cadence) — don't floor. A non-finite or
+  // non-positive value still falls back to the 15-min default so a corrupt setting can't zero the grid.
+  const safe = Number.isFinite(min) && min > 0 ? min : 15;
   SLOT_MINUTES = safe;
   SLOT_MS_CURRENT = safe * 60 * 1000;
 }
@@ -52,7 +54,9 @@ export const SLOTS_PER_HOUR = 4;
  *  used only to cap the while/for loops below so a bad window can never spin forever. Uses a
  *  floor of 5 min on the interval so the bound stays finite even if something odd is set. */
 function slotsPerDayGuard(): number {
-  return Math.ceil(1440 / Math.max(5, SLOT_MINUTES)) + 8;
+  // Floor the divisor at 0.25 min (15s) so a sub-minute test interval still produces a finite —
+  // and correct — per-day bound (e.g. 30s → ~2880 slots) rather than being capped at ~296.
+  return Math.ceil(1440 / Math.max(0.25, SLOT_MINUTES)) + 8;
 }
 
 /** Floor a Date/epoch to the start of its slot (local-aligned) at the CURRENT interval. */
@@ -151,7 +155,7 @@ export function slotsForDay(day: Date, wake: number, sleep: number): number[] {
   startOfDay.setHours(0, 0, 0, 0);
   const out: number[] = [];
   const step = getSlotMs();
-  const slotsInDay = Math.ceil(1440 / Math.max(1, SLOT_MINUTES));
+  const slotsInDay = Math.ceil(1440 / Math.max(0.25, SLOT_MINUTES));
   for (let i = 0; i < slotsInDay; i++) {
     const t = startOfDay.getTime() + i * step;
     if (slotInWindow(minuteOfDay(t), wake, sleep)) out.push(t);
