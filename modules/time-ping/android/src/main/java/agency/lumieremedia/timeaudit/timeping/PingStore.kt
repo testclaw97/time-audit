@@ -28,31 +28,54 @@ import org.json.JSONObject
 object PingStore {
 
     // --- process-wide constants (the ONE place these are defined) ----------------------
-    // Kept here so PingReceiver (which posts the notification + FSI PendingIntent) and
-    // PingActivity (which cancels that same notification when a chip is tapped) can never
-    // drift on the id/channel — a mismatch would leave the notification stuck on screen.
+    // Kept here so the persistent service [PingService] (which posts the alive + check-in
+    // notifications and draws the overlay), [PingReceiver] (which cancels the check-in notice
+    // on a quick-action tap) and [PingActivity] (which cancels it on a lock-screen tap) can
+    // never drift on an id/channel — a mismatch would leave a notification stuck on screen.
+    //
+    // The new architecture (real-device reliability rebuild) has TWO channels, deliberately
+    // separated by importance because they do opposite jobs:
+    //
+    //   · CHANNEL_ALIVE  (LOW)  — the ONE permanent, silent, ongoing "engine is on" notice that
+    //     [PingService] posts as its foreground-service anchor. It never heads-up; its only job
+    //     is to keep our process alive so a scheduled ping always has a live context to render
+    //     from (starting things from a dead background process is what OEMs kill).
+    //   · CHANNEL_CHECKIN (HIGH) — the per-ping "What are you doing right now?" surface. HIGH is
+    //     mandatory: it is what lets the notice heads-up AND what a full-screen-intent requires
+    //     to launch its Activity over the keyguard. This notice is the reliability FLOOR — it is
+    //     posted on EVERY ping regardless of overlay/FSI availability, so a check-in is never
+    //     silently lost; the overlay / FSI are strict upgrades layered on top of it.
 
-    /** High-importance channel that carries the full-screen-intent ping. */
-    const val CHANNEL_ID = "time-ping-fullscreen"
+    /** LOW-importance channel carrying [PingService]'s permanent ongoing "engine is on" notice. */
+    const val CHANNEL_ALIVE = "time-ping-alive"
 
-    /** Stable notification id — one live ping at a time; a new ping replaces the old. */
-    const val NOTIF_ID = 4088
+    /** HIGH-importance channel carrying the per-ping check-in (floor notice + FSI + heads-up). */
+    const val CHANNEL_CHECKIN = "time-ping-checkin"
 
-    /**
-     * LOW-importance channel for [PingOverlayService]'s ongoing foreground-service notice. It is
-     * silent and never heads-up — the overlay WINDOW is the actual UI; this notice only satisfies
-     * the FGS requirement. Kept distinct from [CHANNEL_ID] so the two never share importance.
-     */
-    const val OVERLAY_CHANNEL_ID = "time-ping-overlay"
+    /** Stable id of the permanent alive/foreground notice. Distinct from [CHECKIN_NOTIF_ID]. */
+    const val ALIVE_NOTIF_ID = 4089
 
-    /** Distinct notification id for the overlay FGS notice (must not collide with [NOTIF_ID]). */
-    const val OVERLAY_NOTIF_ID = 4089
+    /** Stable id of the per-ping check-in notice — one live ping at a time; a new one replaces it. */
+    const val CHECKIN_NOTIF_ID = 4088
 
     /** AlarmManager broadcast: "fire a ping now" (carries slotStart + schedule params). */
     const val ACTION_FIRE = "agency.lumieremedia.timeaudit.timeping.ACTION_FIRE"
 
     /** Notification quick-action broadcast: "log this category for this slot" (no chooser). */
     const val ACTION_PICK = "agency.lumieremedia.timeaudit.timeping.ACTION_PICK"
+
+    // --- [PingService] intent actions (the persistent FGS command surface) --------------
+    // The service is a single long-lived process anchor poked by distinct actions rather than a
+    // fleet of transient services. See [PingService.onStartCommand] for the handlers.
+
+    /** Start/keep the persistent FGS foregrounded and ensure the next alarm is armed. */
+    const val ACTION_START = "agency.lumieremedia.timeaudit.timeping.ACTION_START"
+
+    /** Render a check-in for the carried [EXTRA_SLOT_START] right now (floor notice ± overlay/FSI). */
+    const val ACTION_RENDER = "agency.lumieremedia.timeaudit.timeping.ACTION_RENDER"
+
+    /** Tear down any overlay and stop the persistent FGS (tracking turned off). */
+    const val ACTION_STOP = "agency.lumieremedia.timeaudit.timeping.ACTION_STOP"
 
     /** Intent extras shared across alarm / notification / activity. */
     const val EXTRA_SLOT_START = "slotStart"   // Long epoch ms of the slot being asked about
@@ -62,13 +85,14 @@ object PingStore {
     const val EXTRA_CATEGORY = "picked_category" // String category id for ACTION_PICK
     const val EXTRA_TEST = "test_ping"           // Boolean: a "Test the popup" fire (ignore pause, don't chain)
 
-    // requestCode scheme for the alarm PendingIntents. A PendingIntent's identity ignores
-    // its extras, so DISTINCT request codes per boundary are what keep the scheduled alarms
-    // from collapsing into one. The initial batch uses [REQ_ALARM_BASE .. +ALARM_CAP-1];
-    // [REQ_CHAIN] is the single self-perpetuating "next" alarm armed by PingReceiver.
+    // requestCode scheme for the alarm PendingIntents. The rebuild uses ONE alarm at a time —
+    // a single self-rescheduling "next boundary" alarm ([REQ_CHAIN]) re-armed on every fire — so
+    // the cadence is a chain, not a 24h batch. The [REQ_ALARM_BASE .. REQ_CHAIN] range is retained
+    // ONLY so [PingScheduler.cancelAll]/schedule can sweep any leftover batch alarms armed by a
+    // PRIOR (batch-based) version of the app on upgrade; the live scheduler never arms into it.
     const val REQ_ALARM_BASE = 47000
-    const val ALARM_CAP = 60                       // hard cap on the initial batch (spec)
-    const val REQ_CHAIN = REQ_ALARM_BASE + ALARM_CAP // 47060
+    const val ALARM_CAP = 60                       // width of the legacy-batch sweep range (upgrade cleanup)
+    const val REQ_CHAIN = REQ_ALARM_BASE + ALARM_CAP // 47060 — the single self-rescheduling "next" alarm
     const val REQ_TEST = REQ_CHAIN + 1               // 47061 — one-shot "Test the popup" alarm
 
     // --- SharedPreferences plumbing ----------------------------------------------------

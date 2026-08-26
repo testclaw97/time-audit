@@ -74,6 +74,13 @@ export interface TimePingModule {
   clearPendingLogs(): Promise<void>;
   /** Fire the chooser NOW (Settings "Test the popup" + e2e). slotStart = now floored to interval. */
   triggerTestPing(): Promise<void>;
+  /**
+   * Is the persistent native ping engine (PingService, the always-on foreground service) currently
+   * alive? True while tracking is on and the OS hasn't killed the process. Lets the app surface
+   * engine health (e.g. a "tracking is running" indicator, or a nudge to grant battery exemption
+   * if it keeps dying). Always false on web/iOS (no native module). Cheap — reads a static flag.
+   */
+  isEngineRunning(): Promise<boolean>;
 
   // --- special-access permission gates (each is a Settings bounce, never a runtime dialog) ---
   /** Android 12+: AlarmManager.canScheduleExactAlarms(); true on older OSes. */

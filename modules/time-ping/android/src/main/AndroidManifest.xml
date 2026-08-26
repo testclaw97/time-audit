@@ -44,14 +44,17 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
         tools:ignore="BatteryLife" />
     <!--
-      FOREGROUND_SERVICE (+ FOREGROUND_SERVICE_SPECIAL_USE on API 34+) — PingOverlayService runs
-      as a foreground service so it may draw the full-screen chooser OVERLAY window while the
-      phone is unlocked/in use. Starting the chooser as an Activity from a background alarm is
-      blocked by the Android 14/15 background-activity-launch restriction (it degrades the
-      full-screen intent to a heads-up); a foreground service + SYSTEM_ALERT_WINDOW overlay is
-      the reliable full-screen path (same mechanism as Mr. Productive's block screen).
-      "specialUse" is the honest FGS subtype — none of the predefined subtypes describe a
-      transient check-in chooser.
+      FOREGROUND_SERVICE (+ FOREGROUND_SERVICE_SPECIAL_USE on API 34+) — PingService runs as a
+      PERSISTENT foreground service for as long as tracking is on. It is the process-survival
+      anchor: keeping a live, foregrounded process means every scheduled 15-minute ping has a warm
+      WindowManager/overlay context to render from IMMEDIATELY, instead of a cold background start
+      that OEMs (Samsung/Xiaomi) kill. When a ping fires it draws the full-screen chooser OVERLAY
+      window (SYSTEM_ALERT_WINDOW) while the phone is unlocked/in use — starting the chooser as an
+      Activity from a background alarm is blocked by the Android 14/15 background-activity-launch
+      restriction (it degrades the full-screen intent to a heads-up); a foreground service +
+      overlay is the reliable full-screen path (same mechanism as Mr. Productive's block screen).
+      "specialUse" is the honest FGS subtype — none of the predefined subtypes (mediaPlayback,
+      location, etc.) describe a persistent personal check-in scheduler.
       WAKE_LOCK — the service briefly acquires a SCREEN_BRIGHT wakelock (~30s) so a ping that
       lands as the display is dimming still wakes the screen to show the chooser.
     -->
@@ -85,22 +88,24 @@
             tools:ignore="LockedOrientationActivity" />
 
         <!--
-          The UNLOCKED / in-use ping surface: a foreground service that draws the category
-          chooser as a full-screen SYSTEM_ALERT_WINDOW overlay. Used instead of launching
-          PingActivity from the background (which Android 14/15 degrades to a heads-up). The
-          locked / screen-off case still uses PingActivity via the FSI notification.
-            · exported=false            — only our own PingReceiver may start it.
+          The PERSISTENT ping engine: one long-lived foreground service that stays up while
+          tracking is on. It keeps the process alive (so a scheduled ping always renders from a
+          warm context), posts the per-ping check-in notification, and — while the phone is
+          unlocked/in use — draws the category chooser as a full-screen SYSTEM_ALERT_WINDOW
+          overlay. The locked / screen-off case is handled by the SAME notification's full-screen
+          intent launching PingActivity. Replaces the old transient per-ping PingOverlayService.
+            · exported=false            — only our own components (PingReceiver / boot / module) start it.
             · foregroundServiceType=specialUse — required on API 34+ and must match the type
                                          passed to startForeground(); the property string is the
                                          human justification surfaced to Play reviewers.
         -->
         <service
-            android:name="agency.lumieremedia.timeaudit.timeping.PingOverlayService"
+            android:name="agency.lumieremedia.timeaudit.timeping.PingService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Time-audit check-in: briefly draws a full-screen category chooser over the screen when a scheduled 15-minute ping fires, dismissed as soon as the user taps a category." />
+                android:value="Time Audit check-in engine: a persistent service that keeps the app's 15-minute check-in scheduler alive and draws the full-screen category chooser when each scheduled ping fires, so the reminder reliably appears while the phone is in use." />
         </service>
 
         <!--
