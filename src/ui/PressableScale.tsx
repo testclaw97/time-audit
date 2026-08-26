@@ -7,6 +7,7 @@ import {
   Animated,
   Pressable,
   StyleProp,
+  StyleSheet,
   ViewStyle,
 } from "react-native";
 
@@ -40,6 +41,18 @@ export default function PressableScale({
   const scale = useRef(new Animated.Value(1)).current;
   const opacity = useRef(new Animated.Value(1)).current;
 
+  // The visual `style` lives on the inner Animated.View (so the whole thing scales on press).
+  // But flex/size props must ALSO be on the OUTER Pressable, or a `flex: 1` PressableScale won't
+  // actually take its share of a flex row/column (it shrinks to content). Forward just those.
+  const flat = (StyleSheet.flatten(style) ?? {}) as ViewStyle;
+  const outerLayout: ViewStyle = {};
+  if (flat.flex !== undefined) outerLayout.flex = flat.flex;
+  if (flat.flexGrow !== undefined) outerLayout.flexGrow = flat.flexGrow;
+  if (flat.flexShrink !== undefined) outerLayout.flexShrink = flat.flexShrink;
+  if (flat.flexBasis !== undefined) outerLayout.flexBasis = flat.flexBasis;
+  if (flat.alignSelf !== undefined) outerLayout.alignSelf = flat.alignSelf;
+  if (flat.width !== undefined) outerLayout.width = flat.width;
+
   const animate = (toScale: number, toOpacity: number) => {
     Animated.parallel([
       Animated.spring(scale, {
@@ -68,6 +81,7 @@ export default function PressableScale({
       accessibilityState={accessibilityState}
       testID={testID}
       hitSlop={hitSlop}
+      style={outerLayout}
     >
       <Animated.View style={[style, { transform: [{ scale }], opacity }]}>
         {children}
