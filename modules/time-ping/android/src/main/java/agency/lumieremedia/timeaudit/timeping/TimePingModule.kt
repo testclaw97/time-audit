@@ -90,6 +90,17 @@ class TimePingModule : Module() {
             }
         }
 
+        // Atomic read-and-clear — the race-free drain path (see PingStore.takePendingLogs). JS
+        // should prefer this over getPendingLogs()+clearPendingLogs(), which lost a log recorded
+        // in the gap between the two calls.
+        AsyncFunction("takePendingLogs") {
+            try {
+                PingStore.takePendingLogs(context)
+            } catch (_: Throwable) {
+                emptyList<Map<String, Any>>()
+            }
+        }
+
         AsyncFunction("clearPendingLogs") {
             try {
                 PingStore.clearPendingLogs(context)

@@ -75,6 +75,13 @@ export interface TimePingModule {
   getPendingLogs(): Promise<PendingLog[]>;
   /** Empty the pending-log queue after JS has merged it into the entry store. */
   clearPendingLogs(): Promise<void>;
+  /**
+   * ATOMICALLY read-and-clear the pending queue in one native call — returns every queued log and
+   * empties the store under a single lock. Prefer this over getPendingLogs()+clearPendingLogs():
+   * that pair is racy (a chip tapped between the two calls was wiped unread). Anything recorded
+   * after this returns stays queued for the next drain.
+   */
+  takePendingLogs(): Promise<PendingLog[]>;
   /** Fire the chooser NOW (Settings "Test the popup" + e2e). slotStart = now floored to interval. */
   triggerTestPing(): Promise<void>;
   /**

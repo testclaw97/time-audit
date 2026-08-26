@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   AppState,
+  Linking,
   ScrollView,
   StyleSheet,
   Switch,
@@ -21,7 +22,7 @@ import PressableScale from "../ui/PressableScale";
 import { updateSettings, useStore } from "../lib/store";
 import TimePing, { isAvailable } from "../../modules/time-ping";
 import {
-  getPermissionStatus,
+  getNotifPermission,
   requestPermission,
   reschedulePings,
   setupNotificationChannels,
@@ -44,12 +45,20 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   // finish CTA stays locked until the three ESSENTIAL grants (notifications + overlay + exact
   // alarms) are green, and — on an OEM skin (Xiaomi/Samsung/…) — until the user confirms the extra
   // switches. The lock-screen popup itself is an OPTIONAL toggle on this screen.
+  const native = isAvailable();
   const [step, setStep] = useState<"intro" | "permission">("intro");
   const [notifGranted, setNotifGranted] = useState(false);
+  // Whether the OS will still show a notification-permission dialog. When false (permanently
+  // denied), the "Allow" action must deep-link to Settings instead of silently no-opping.
+  const [notifCanAskAgain, setNotifCanAskAgain] = useState(true);
   const [overlayGranted, setOverlayGranted] = useState(false);
   const [exactGranted, setExactGranted] = useState(false);
   const [fsiGranted, setFsiGranted] = useState(false);
   const [manufacturer, setManufacturer] = useState("");
+  // On a native build the OEM gate depends on Build.MANUFACTURER, fetched async. Until it resolves
+  // `isOem` is falsely false — so hold the finish button until we actually know, or a fast tap could
+  // slip past the OEM step. On web/iOS there's no native module, so nothing to wait for.
+  const [manufacturerResolved, setManufacturerResolved] = useState(!native);
 
   const windowMinutes = (sleep - wake + 24 * 60) % (24 * 60) || 24 * 60;
   const pingsPerDay = Math.floor(windowMinutes / interval);
@@ -63,14 +72,16 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
     : "phone";
   // On an OEM device the user must also confirm they flipped the MIUI/Samsung switches — the app
   // physically can't read those ops, so confirmation is the only signal we get.
-  const canFinish = essentialsGranted && (!isOem || settings.oemSetupConfirmed);
+  const canFinish =
+    essentialsGranted && manufacturerResolved && (!isOem || settings.oemSetupConfirmed);
 
   // Re-check every gate on entering step 2 + whenever we return to the foreground (the user grants
   // them in system Settings screens, so the values flip while we're backgrounded).
   const refreshPerms = useCallback(async () => {
     try {
-      const status = await getPermissionStatus();
-      setNotifGranted(status === "granted" || status === "web");
+      const { granted, canAskAgain } = await getNotifPermission();
+      setNotifGranted(granted);
+      setNotifCanAskAgain(canAskAgain);
     } catch (e) {
       console.warn("[onboarding] notif status failed", e);
     }
@@ -104,6 +115,9 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
           setManufacturer((await TimePing.getManufacturer()) || "");
         } catch (e) {
           console.warn("[onboarding] getManufacturer failed", e);
+        } finally {
+          // Resolved (or failed) — either way we now know the brand, so the finish gate can open.
+          setManufacturerResolved(true);
         }
       }
     })();
@@ -130,9 +144,17 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
 
   const allowNotifications = async () => {
     try {
-      await requestPermission();
+      if (notifCanAskAgain) {
+        // The OS will still show the system dialog — ask.
+        await requestPermission();
+      } else {
+        // Permanently denied (Android 13+ "don't ask again"): requesting silently no-ops, so the
+        // ONLY recovery is the app's system settings. Without this the user is locked out of
+        // onboarding forever. AppState 'active' → refreshPerms picks up the grant on return.
+        await Linking.openSettings();
+      }
     } catch (e) {
-      console.warn("[onboarding] requestPermission failed", e);
+      console.warn("[onboarding] allowNotifications failed", e);
     }
     refreshPerms();
   };
@@ -220,9 +242,14 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
           <Card style={styles.permStatusCard} tone="flat">
             <PermRow
               title="Notifications"
-              note="Lets the check-in reach you every interval."
+              note={
+                notifGranted || notifCanAskAgain
+                  ? "Lets the check-in reach you every interval."
+                  : "Blocked in Android. Tap Open settings → allow notifications, then come back."
+              }
               granted={notifGranted}
               onAllow={allowNotifications}
+              actionLabel={notifCanAskAgain ? "Allow" : "Open settings"}
               testID="allow-notifications"
             />
             <View style={styles.permDivider} />
@@ -469,12 +496,14 @@ function PermRow({
   note,
   granted,
   onAllow,
+  actionLabel = "Allow",
   testID,
 }: {
   title: string;
   note: string;
   granted: boolean;
   onAllow: () => void;
+  actionLabel?: string;
   testID?: string;
 }) {
   return (
@@ -488,11 +517,11 @@ function PermRow({
         ) : (
           <PressableScale
             onPress={onAllow}
-            accessibilityLabel={`Allow ${title}`}
+            accessibilityLabel={`${actionLabel} ${title}`}
             style={styles.permAllowBtn}
             testID={testID}
           >
-            <Text style={styles.permAllowText}>Allow</Text>
+            <Text style={styles.permAllowText}>{actionLabel}</Text>
           </PressableScale>
         )}
       </View>

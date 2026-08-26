@@ -112,15 +112,18 @@ export async function hydrate(): Promise<void> {
       AsyncStorage.getItem(K_SETTINGS),
       AsyncStorage.getItem(K_ENTRIES),
     ]);
-    const settings = rawS
+    // Always build a FRESH object (spread) — never alias the module-level DEFAULT_SETTINGS, which
+    // is the immutable reset baseline clearAllData() restores. The category migration below mutates
+    // `settings.categories`, and aliasing DEFAULT_SETTINGS here would corrupt that baseline.
+    const settings: Settings = rawS
       ? { ...DEFAULT_SETTINGS, ...(JSON.parse(rawS) as Partial<Settings>) }
-      : DEFAULT_SETTINGS;
+      : { ...DEFAULT_SETTINGS };
     // The spread above already back-fills intervalMinutes/categories for settings persisted
     // before those fields existed. Guard against an explicitly missing/empty categories array
     // (corrupt or partially-written data) — an empty category list would leave the chooser and
     // the in-app chips with nothing to show, so fall back to the defaults.
     if (!Array.isArray(settings.categories) || settings.categories.length === 0) {
-      settings.categories = DEFAULT_CATEGORIES;
+      settings.categories = [...DEFAULT_CATEGORIES];
     } else {
       // Migration: categories persisted before the Deep/Shallow/Reactive tag get a default kind.
       settings.categories = settings.categories.map((c) =>
@@ -322,7 +325,10 @@ export async function syncCategoriesToNative(): Promise<void> {
 export async function drainPendingLogs(): Promise<number> {
   if (!isAvailable() || !TimePing) return 0;
   try {
-    const pending = await TimePing.getPendingLogs();
+    // ATOMIC take-and-clear (not getPendingLogs()+clearPendingLogs()). The old pair was racy: a
+    // chip tapped between the read and the blanket clear was wiped unread. takePendingLogs returns
+    // this batch and empties the native queue in one lock; anything logged after stays queued.
+    const pending = await TimePing.takePendingLogs();
     if (!pending || pending.length === 0) return 0;
     const byId = new Map(state.settings.categories.map((c) => [c.id, c]));
     const next: Entries = { ...state.entries };
@@ -338,10 +344,12 @@ export async function drainPendingLogs(): Promise<number> {
       merged++;
     }
     if (merged > 0) {
+      // The native queue is already cleared (atomic take). setState puts the merged entries in
+      // memory immediately; if persistEntries throws, they're still in state and get re-persisted
+      // by the next write — so a failed disk write degrades to "saved next time", never a hard loss.
       setState({ entries: next });
       await persistEntries(next);
     }
-    await TimePing.clearPendingLogs();
     return merged;
   } catch (e) {
     console.warn("[store] drainPendingLogs failed", e);

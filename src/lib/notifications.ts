@@ -78,6 +78,25 @@ export async function getPermissionStatus(): Promise<Notifications.PermissionSta
   return status;
 }
 
+/**
+ * Richer notification-permission read for the onboarding gate: whether it's granted AND whether the
+ * OS will still show a request dialog. On Android 13+ once POST_NOTIFICATIONS is denied twice the
+ * system marks it permanently denied and requestPermissionsAsync() resolves `denied` WITHOUT any
+ * dialog — so a "Allow" button silently no-ops and the user is stuck. When `canAskAgain` is false
+ * the UI must instead deep-link to system Settings (see OnboardingScreen). Web reports granted so
+ * the web build is never gated on a permission it doesn't have.
+ */
+export async function getNotifPermission(): Promise<{ granted: boolean; canAskAgain: boolean }> {
+  if (isWeb) return { granted: true, canAskAgain: false };
+  try {
+    const p = await Notifications.getPermissionsAsync();
+    // canAskAgain can be undefined on some platforms/SDKs — treat missing as "can still ask".
+    return { granted: p.status === "granted", canAskAgain: p.canAskAgain !== false };
+  } catch {
+    return { granted: false, canAskAgain: true };
+  }
+}
+
 /** Ask for notification permission. Returns true if granted. */
 export async function requestPermission(): Promise<boolean> {
   if (isWeb) return false;

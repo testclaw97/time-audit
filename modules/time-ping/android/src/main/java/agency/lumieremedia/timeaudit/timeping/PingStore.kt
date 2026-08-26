@@ -271,6 +271,39 @@ object PingStore {
         }
     }
 
+    /**
+     * ATOMICALLY read-and-clear the pending queue: return every queued log AND reset the store to
+     * empty inside ONE [lock] block, so a chip tap that lands between a JS read and a JS clear can
+     * never be wiped unread. This replaces the racy get()+clear() pair the JS drain used to do as
+     * two separate native calls — a ping recorded during that gap was blanket-erased by the clear.
+     * Anything added AFTER this returns stays queued for the next drain; nothing in the returned
+     * batch is left behind. Same JS-friendly map shape as [getPendingLogs].
+     */
+    fun takePendingLogs(ctx: Context): List<Map<String, Any>> {
+        synchronized(lock) {
+            val out = try {
+                val arr = JSONArray(prefs(ctx).getString(KEY_PENDING, "[]"))
+                val list = ArrayList<Map<String, Any>>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    list.add(
+                        mapOf(
+                            "slotStart" to o.optLong("slotStart"),
+                            "category" to o.optString("category"),
+                            "ts" to o.optLong("ts")
+                        )
+                    )
+                }
+                list
+            } catch (_: Throwable) {
+                emptyList<Map<String, Any>>()
+            }
+            // Clear in the SAME critical section as the read — this is what makes it atomic.
+            prefs(ctx).edit().putString(KEY_PENDING, "[]").apply()
+            return out
+        }
+    }
+
     // --- schedule params (receiver re-chain + boot restore) ----------------------------
 
     /**

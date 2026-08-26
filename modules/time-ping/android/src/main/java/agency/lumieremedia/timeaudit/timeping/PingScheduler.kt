@@ -168,9 +168,14 @@ object PingScheduler {
         return false
     }
 
-    /** Cancel the whole request-code range (legacy batch + chain), whether or not each exists. */
+    /**
+     * Cancel every request code this app can arm (legacy batch + chain + the one-shot test alarm),
+     * whether or not each currently exists. Range extends through [PingStore.REQ_TEST] so that a
+     * "Test the popup" alarm pending in its ~4s window is also killed by cancelAll — otherwise
+     * turning tracking off right after tapping Test would still let one stray test ping fire.
+     */
     private fun cancelRange(ctx: Context, am: AlarmManager) {
-        for (rc in PingStore.REQ_ALARM_BASE..PingStore.REQ_CHAIN) {
+        for (rc in PingStore.REQ_ALARM_BASE..PingStore.REQ_TEST) {
             val pi = broadcastPI(ctx, rc, buildFireIntent(ctx, 0L, 0, 0, 0))
             am.cancel(pi)
         }

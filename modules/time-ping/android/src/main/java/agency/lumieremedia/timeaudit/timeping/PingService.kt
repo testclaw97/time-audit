@@ -411,10 +411,20 @@ class PingService : Service() {
 
     // --- lifecycle plumbing ------------------------------------------------------------
 
-    /** Remove the window + release the wakelock. Idempotent; every step guarded. */
+    /**
+     * Remove the window + release the wakelock, AND cancel any live check-in notification.
+     * Idempotent; every step guarded. Cancelling CHECKIN_NOTIF_ID here matters because the OS (or
+     * an OEM kill) can destroy the service while a HIGH-importance check-in heads-up is on screen —
+     * without this it would linger with no engine behind it, its category buttons pointing at a
+     * dead process. The ALIVE/foreground notice is removed by the system / stopForeground already.
+     */
     private fun teardown() {
         removeOverlay()
         releaseWake()
+        try {
+            NotificationManagerCompat.from(this).cancel(PingStore.CHECKIN_NOTIF_ID)
+        } catch (_: Throwable) {
+        }
     }
 
     private fun stopSelfSafely() {
