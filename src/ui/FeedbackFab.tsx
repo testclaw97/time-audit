@@ -65,15 +65,19 @@ export default function FeedbackFab() {
 
   return (
     <>
-      <PressableScale
-        onPress={() => setOpen(true)}
-        accessibilityLabel="Feedback and sharing"
-        accessibilityRole="button"
-        style={[styles.fab, { bottom: insets.bottom + FAB_LIFT }]}
-        scaleTo={0.9}
-      >
-        <Text style={styles.fabGlyph}>💬</Text>
-      </PressableScale>
+      {/* Absolute positioning lives on the WRAPPER View, not the PressableScale (which only
+          forwards flex/size to its Pressable, not position) — so the button pins bottom-right. */}
+      <View style={[styles.fabWrap, { bottom: insets.bottom + FAB_LIFT }]}>
+        <PressableScale
+          onPress={() => setOpen(true)}
+          accessibilityLabel="Feedback and sharing"
+          accessibilityRole="button"
+          style={styles.fab}
+          scaleTo={0.9}
+        >
+          <Text style={styles.fabGlyph}>💬</Text>
+        </PressableScale>
+      </View>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <View style={styles.scrim}>
@@ -104,9 +108,8 @@ function MenuItem({ emoji, label, onPress }: { emoji: string; label: string; onP
 }
 
 const styles = StyleSheet.create({
+  fabWrap: { position: "absolute", right: space.s3 },
   fab: {
-    position: "absolute",
-    right: space.s3,
     width: 48,
     height: 48,
     borderRadius: radius.pill,
