@@ -10,20 +10,22 @@
   ESCAPE (canAskAgain → "Open settings" via Linking, no more permanent lockout); OEM finish-gate waits
   for Build.MANUFACTURER (closes fast-tap bypass); `cancelAll` also cancels REQ_TEST; `teardown()`
   cancels the check-in notif; `hydrate()` stops aliasing DEFAULT_SETTINGS.
-- **STILL OPEN — flagged for TJ's call (NOT fixed, need design or on-device):**
-  1. **"Other" from the lock screen is a dead-end** (MEDIUM): native writes `__other__` pending log +
-     opens the app, but NOTHING in JS reads the launch-intent slot → custom label silently dropped on
-     drain. Real broken flow. Fix = a native `consumeLaunchSlot()` + App.tsx cold-start wiring (needs device).
-  2. **Chain can terminate with no watchdog** (MEDIUM): if `armNextBoundary` ever returns false the
-     cadence dies until app-open/reboot (both ARE partial backstops). Proper fix = WorkManager watchdog
-     or a non-rendering re-arm alarm (already on the Phase-B reliability list).
-  3. **Essentials over-gate** (design): overlay+exact HARD-block onboarding, but per the Kotlin design
-     they're "strict upgrades" (the notification floor works without them). Notifications is the true
-     floor. TJ to decide: demote overlay/exact to "recommended", or keep hard-gated (he asked for
-     "the 100% important ones must be flipped on").
-  4. **Epoch-vs-local boundary drift** (LOW/cosmetic): at coarse intervals (60m) in half-hour zones
-     (India UTC+5:30) pings land at :30 not :00. Fine at 15m in Germany. Align to local midnight if it matters.
-- Next: bring up the Poco F5 rig (step 1 below) → on-device test v0.3.1 → decide the 4 open items → ship.
+- **RESOLVED this session (TJ's calls):**
+  - **"Other" dead-end FIXED**: native `PingStore.setFocusSlot` on the Other tap in BOTH paths
+    (PingActivity locked + PingService in-use) + `TimePing.consumeLaunchSlot()` + App.tsx consumes it
+    on cold-start & foreground → opens Today quick-entry for that slot. (NEEDS on-device confirm.)
+  - **Gate = NOTIFICATIONS-ONLY** (TJ chose this): overlay+exact demoted to a "RECOMMENDED" card
+    (non-blocking); notifications stays required; OEM confirm stays required on Xiaomi/Samsung.
+- **STILL OPEN — deferred by design (NOT fixed):**
+  1. **Chain has no watchdog** (MEDIUM): if `armNextBoundary` returns false the cadence dies until
+     app-open/reboot (both ARE partial backstops). Proper fix = WorkManager watchdog / non-rendering
+     re-arm alarm — Phase-B reliability item.
+  2. **Epoch-vs-local boundary drift** (LOW/cosmetic): coarse intervals (60m) in half-hour zones
+     (India UTC+5:30) land at :30 not :00. Fine at 15m in Germany. Align to local midnight if it matters.
+- **CI green at HEAD** (`android-build.yml` on feature/oem-onboarding, run 32978165152) — Kotlin
+  compiles, installable APK artifact `time-audit-release-apk`. tsc + web export clean. NOT on-device, NOT released.
+- Next: bring up the Poco F5 rig (step 1 below) → on-device test v0.3.1 (incl. the new Other path +
+  notifications-only gate) → address the 2 deferred items if a device proves them → ship.
 
 ---
 
