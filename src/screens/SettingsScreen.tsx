@@ -426,59 +426,6 @@ export default function SettingsScreen({
         <Text style={styles.hint}>How often the popup asks what you're doing.</Text>
       </FadeIn>
 
-      <FadeIn delay={170}>
-        <Text style={[type.label, styles.sectionLabel]}>CATEGORIES</Text>
-        <Card padded={false}>
-          {settings.categories.map((cat, i) => (
-            <View key={cat.id}>
-              {i > 0 ? <View style={styles.catDivider} /> : null}
-              <View style={styles.catRow}>
-                <PressableScale
-                  onPress={() => setEditor({ mode: "edit", id: cat.id, label: cat.label, emoji: cat.emoji, color: cat.color })}
-                  accessibilityLabel={`Edit ${cat.label}`}
-                  style={styles.catMain}
-                >
-                  <View style={[styles.catDot, { backgroundColor: cat.color }]} />
-                  <Text style={styles.catEmoji}>{cat.emoji}</Text>
-                  <Text style={[type.bodyStrong, styles.catLabel]} numberOfLines={1}>
-                    {cat.label}
-                  </Text>
-                </PressableScale>
-                <View style={styles.catActions}>
-                  <IconBtn
-                    label={`Move ${cat.label} up`}
-                    glyph="↑"
-                    disabled={i === 0}
-                    onPress={() => moveCategory(i, -1)}
-                  />
-                  <IconBtn
-                    label={`Move ${cat.label} down`}
-                    glyph="↓"
-                    disabled={i === settings.categories.length - 1}
-                    onPress={() => moveCategory(i, 1)}
-                  />
-                  <IconBtn label={`Delete ${cat.label}`} glyph="✕" danger onPress={() => confirmDelete(cat)} />
-                </View>
-              </View>
-            </View>
-          ))}
-          <View style={styles.catDivider} />
-          <PressableScale
-            onPress={() => setEditor({ mode: "add", label: "", emoji: "", color: SWATCHES[0] })}
-            accessibilityLabel="Add category"
-            style={styles.catRow}
-          >
-            <View style={styles.addPlus}>
-              <Text style={styles.addPlusText}>＋</Text>
-            </View>
-            <Text style={[type.bodyStrong, styles.addLabel]}>Add category</Text>
-          </PressableScale>
-        </Card>
-        <PressableScale onPress={confirmReset} accessibilityLabel="Reset categories to defaults" style={styles.resetRow}>
-          <Text style={styles.resetText}>Reset to defaults</Text>
-        </PressableScale>
-      </FadeIn>
-
       <FadeIn delay={220}>
         <Text style={[type.label, styles.sectionLabel]}>THE POPUP</Text>
         <Button label="Test the popup" icon="⚡" onPress={testPopup} testID="test-popup" />
@@ -627,13 +574,6 @@ export default function SettingsScreen({
       </FadeIn>
 
       <Text style={styles.version}>Time Audit · v1.0 · on-device only</Text>
-
-      <CategoryEditor
-        editor={editor}
-        onChange={setEditor}
-        onSave={saveEditor}
-        onCancel={() => setEditor(null)}
-      />
     </ScrollView>
   );
 }

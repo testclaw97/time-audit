@@ -66,13 +66,11 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const windowMinutes = (sleep - wake + 24 * 60) % (24 * 60) || 24 * 60;
   const pingsPerDay = Math.floor(windowMinutes / interval);
 
-  // Notification-first (2026-08-28, TJ): the reliable, works-on-every-phone path is the check-in
-  // NOTIFICATION (fires locked, in-use, screen-off; one tap logs). The full-screen popup takeover
-  // is a bonus that OEMs (MIUI etc.) silently block and Google Play rejects — so it NEVER gates
-  // onboarding. The only hard requirements are notifications (the check-in itself) + exact alarms
-  // (on-time firing). Overlay / lock-screen / autostart / battery are optional reliability boosters.
-  // On web/iOS exact doesn't exist, so refreshPerms marks it satisfied.
-  const essentialsGranted = notifGranted && exactGranted;
+  // Mandatory gate (TJ, 2026-08-28): you can't start until the app can actually run its check-in —
+  // notifications, display-over-other-apps, exact alarms, and lock-screen/full-screen. The same set
+  // is re-enforced on every open by PermissionWall. (Battery + the OEM switches stay optional here
+  // because the app can't verify them.) On web/iOS these don't exist, so refreshPerms marks them ok.
+  const essentialsGranted = notifGranted && overlayGranted && exactGranted && fsiGranted;
   const isOem = OEM_BRANDS.test(manufacturer);
   const brand = manufacturer
     ? manufacturer.charAt(0).toUpperCase() + manufacturer.slice(1)
@@ -181,6 +179,8 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const allowOverlay = () =>
     runNative(() => TimePing!.requestOverlayPermission(), "requestOverlayPermission");
   const allowExact = () => runNative(() => TimePing!.requestExactAlarm(), "requestExactAlarm");
+  const allowFsi = () =>
+    runNative(() => TimePing!.requestFullScreenIntent(), "requestFullScreenIntent");
   const allowBattery = () =>
     runNative(() => TimePing!.requestBatteryExemption(), "requestBatteryExemption");
   const openOemPerms = () =>
@@ -224,15 +224,15 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
         <FadeIn>
           <Text style={styles.kicker}>ALMOST THERE</Text>
           <Text style={[type.display, styles.title]}>
-            Turn on your{"\n"}check-ins.
+            Give it what it{"\n"}needs to run.
           </Text>
         </FadeIn>
 
         <FadeIn delay={110}>
           <Card tone="accent" style={styles.promise}>
             <Text style={[type.body, styles.promiseText]}>
-              Every interval, Time Audit sends a check-in — tap a category right on it to log the
-              moment, even when your phone's locked. These two make that work.
+              Time Audit checks in with a full-screen popup and a notification you can tap — grant
+              these so it can actually reach you. The app stays locked until they're on.
             </Text>
           </Card>
         </FadeIn>
@@ -254,11 +254,27 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
             />
             <View style={styles.permDivider} />
             <PermRow
+              title="Display over other apps"
+              note="Lets the check-in cover your screen as a full-screen popup while you're using the phone."
+              granted={overlayGranted}
+              onAllow={allowOverlay}
+              testID="allow-overlay"
+            />
+            <View style={styles.permDivider} />
+            <PermRow
               title="Exact alarms"
               note="Fires the check-in right on time, not whenever Android feels like it."
               granted={exactGranted}
               onAllow={allowExact}
               testID="allow-exact"
+            />
+            <View style={styles.permDivider} />
+            <PermRow
+              title="Show over lock screen"
+              note="Lets the check-in appear even when your phone is locked."
+              granted={fsiGranted}
+              onAllow={allowFsi}
+              testID="allow-fsi"
             />
           </Card>
         </FadeIn>
@@ -267,8 +283,8 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
           <Text style={[type.label, styles.sectionLabel]}>OPTIONAL · MORE RELIABLE</Text>
           <Card tone="flat" style={styles.permStatusCard}>
             <Text style={[type.caption, styles.optIntro]}>
-              Not required — the check-in works without these. They just help pings survive
-              aggressive battery-saving, and add a full-screen popup while you're using the phone.
+              Not required to start, but strongly recommended — these help pings survive aggressive
+              battery-saving and OEM app-killing.
             </Text>
             <View style={styles.permDivider} />
             <PermRow
@@ -277,14 +293,6 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
               granted={batteryGranted}
               onAllow={allowBattery}
               testID="allow-battery"
-            />
-            <View style={styles.permDivider} />
-            <PermRow
-              title="Full-screen popup (while in use)"
-              note="Bonus: covers your screen with the chooser while you're actively on the phone."
-              granted={overlayGranted}
-              onAllow={allowOverlay}
-              testID="allow-overlay"
             />
             {isOem ? (
               <>

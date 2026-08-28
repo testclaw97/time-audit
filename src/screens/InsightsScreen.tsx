@@ -36,7 +36,7 @@ interface CatGroup {
   minutes: number;
 }
 
-export default function InsightsScreen() {
+export default function InsightsScreen({ onOpenSettings }: { onOpenSettings?: () => void }) {
   const insets = useSafeAreaInsets();
   const { settings, entries } = useStore();
   const [range, setRange] = useState<Range>("week");
@@ -116,7 +116,19 @@ export default function InsightsScreen() {
       showsVerticalScrollIndicator={false}
     >
       <FadeIn>
-        <Text style={[type.label, styles.kicker]}>INSIGHTS</Text>
+        <View style={styles.headerRow}>
+          <Text style={[type.label, styles.kicker]}>INSIGHTS</Text>
+          <PressableScale
+            onPress={onOpenSettings}
+            disabled={!onOpenSettings}
+            accessibilityLabel="Settings"
+            accessibilityRole="button"
+            style={styles.gearBtn}
+            scaleTo={0.9}
+          >
+            <Text style={styles.gearGlyph}>⚙︎</Text>
+          </PressableScale>
+        </View>
         <Text style={[type.title, styles.title]}>Where your time went</Text>
         <View style={styles.segment}>
           <SegBtn label="Today" active={range === "today"} onPress={() => setRange("today")} />
@@ -370,6 +382,18 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: space.s3, gap: space.s3 },
   kicker: { color: colors.accent, marginBottom: 2 },
+  headerRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
+  gearBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  gearGlyph: { fontSize: 18, color: colors.fg2 },
   title: { color: colors.fg, marginBottom: space.s2 },
 
   segment: {

@@ -20,11 +20,14 @@ export default function CatchUpModal({
   visible,
   slots,
   onClose,
+  mandatory = false,
 }: {
   visible: boolean;
   /** Ascending epoch slot-starts to show as fillable cells (elapsed blocks up to now). */
   slots: number[];
   onClose: () => void;
+  /** On-open wall: can't be dismissed until every shown block is logged (no backdrop, no back). */
+  mandatory?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -103,7 +106,10 @@ export default function CatchUpModal({
     void logManyEntries(empty, cat.label, cat.id);
   };
 
+  // In mandatory (on-open wall) mode you can't leave until every shown block is logged.
+  const canLeave = !mandatory || remaining === 0;
   const close = () => {
+    if (!canLeave) return;
     setAnchor(null);
     onClose();
   };
@@ -114,23 +120,37 @@ export default function CatchUpModal({
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
       <View style={styles.scrim}>
-        <Pressable style={styles.backdrop} onPress={close} accessibilityLabel="Close catch-up" />
+        <Pressable
+          style={styles.backdrop}
+          onPress={canLeave ? close : undefined}
+          accessibilityLabel={canLeave ? "Close catch-up" : "Fill your blocks to continue"}
+        />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + space.s2 }]}>
           <View style={styles.handle} />
 
           {/* Header */}
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
-              <Text style={[type.heading, styles.title]}>Catch up</Text>
+              <Text style={[type.heading, styles.title]}>
+                {mandatory ? "You've been away" : "Catch up"}
+              </Text>
               <Text style={styles.sub}>
                 {remaining > 0
-                  ? `${remaining} block${remaining === 1 ? "" : "s"} still unlogged`
+                  ? mandatory
+                    ? `Log these ${remaining} block${remaining === 1 ? "" : "s"} to continue`
+                    : `${remaining} block${remaining === 1 ? "" : "s"} still unlogged`
                   : "All caught up 🎉"}
               </Text>
             </View>
-            <PressableScale onPress={close} accessibilityLabel="Done" style={styles.doneBtn} scaleTo={0.94}>
-              <Text style={styles.doneText}>Done</Text>
-            </PressableScale>
+            {canLeave ? (
+              <PressableScale onPress={close} accessibilityLabel="Done" style={styles.doneBtn} scaleTo={0.94}>
+                <Text style={styles.doneText}>Done</Text>
+              </PressableScale>
+            ) : (
+              <View style={styles.lockedPill}>
+                <Text style={styles.lockedPillText}>🔒 {remaining} left</Text>
+              </View>
+            )}
           </View>
 
           {/* How-to line adapts to the current mode */}
@@ -345,6 +365,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   doneText: { color: colors.onAccent, fontWeight: "800", fontSize: 14 },
+  lockedPill: {
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+  },
+  lockedPillText: { color: colors.muted, fontWeight: "800", fontSize: 13 },
 
   howto: { ...type.caption, color: colors.fg2, marginTop: space.s1, marginBottom: space.s1, minHeight: 34 },
 

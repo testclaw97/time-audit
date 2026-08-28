@@ -9,9 +9,36 @@ import {
   displayLabel,
   getSlotMinutes,
   normalizeLabel,
+  slotStartFor,
   slotsForDay,
   todaySlots,
 } from "./time";
+
+/**
+ * The "you've been away" run: consecutive UNLOGGED blocks ending at NOW (ascending). Ignores
+ * blocks from before tracking began (a fresh install mid-day shouldn't claim hours of absence)
+ * and caps the run at 24 so a long absence stays a sensible one-screen fill. Shared by the Today
+ * catch-up card and the on-open catch-up wall so both agree on exactly what "caught up" means.
+ */
+export function trailingGapSlots(
+  entries: Entries,
+  wake: number,
+  sleep: number,
+  trackingStartedAt: number,
+  now: Date = new Date(),
+): number[] {
+  const slots = todaySlots(wake, sleep, now);
+  const startBoundary = trackingStartedAt > 0 ? slotStartFor(trackingStartedAt) : 0;
+  const gap: number[] = [];
+  for (let i = slots.length - 1; i >= 0; i--) {
+    const s = slots[i];
+    if (entries[String(s)]?.text?.trim()) break;
+    if (s < startBoundary) break;
+    gap.push(s);
+    if (gap.length >= 24) break;
+  }
+  return gap.reverse();
+}
 
 export interface Group {
   label: string; // normalized key

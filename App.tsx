@@ -6,7 +6,6 @@ import {
   ActivityIndicator,
   AppState,
   AppStateStatus,
-  Modal,
   Platform,
   StyleSheet,
   Text,
@@ -23,8 +22,11 @@ import { colors, radius, space, type } from "./src/theme";
 import PressableScale from "./src/ui/PressableScale";
 import OnboardingScreen from "./src/screens/OnboardingScreen";
 import TodayScreen from "./src/screens/TodayScreen";
+import CategoriesScreen from "./src/screens/CategoriesScreen";
 import InsightsScreen from "./src/screens/InsightsScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
+import PermissionWall from "./src/screens/PermissionWall";
+import CatchUpModal from "./src/screens/CatchUpModal";
 import FeedbackFab from "./src/ui/FeedbackFab";
 import {
   drainPendingLogs,
@@ -35,6 +37,7 @@ import {
   useStore,
   type Settings,
 } from "./src/lib/store";
+import { trailingGapSlots } from "./src/lib/insights";
 import {
   installNotificationHandler,
   parseResponse,
@@ -101,22 +104,44 @@ async function consumeLaunchSlot(): Promise<number | null> {
   }
 }
 
-// Two tabs only — Today (the truth) and Insights (trends + share). Settings lives behind a gear
-// on the Today header, shown as a dismissible modal (so "how do I get back" is never a question).
-type Tab = "today" | "insights";
+// Four tabs — Today (the truth), Categories (edit the answers), Insights (trends + share), and
+// Settings. Everything is one tap from the bottom bar; the Today header still has a gear as a
+// shortcut too.
+type Tab = "today" | "categories" | "insights" | "settings";
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
   { key: "today", label: "Today", icon: "🏠" },
+  { key: "categories", label: "Categories", icon: "🏷️" },
   { key: "insights", label: "Insights", icon: "📊" },
+  { key: "settings", label: "Settings", icon: "⚙️" },
 ];
 
 function Root() {
   const insets = useSafeAreaInsets();
   const { ready, settings } = useStore();
   const [tab, setTab] = useState<Tab>("today");
-  const [showSettings, setShowSettings] = useState(false);
   const [focusSlot, setFocusSlot] = useState<number | null>(null);
+  // Forcing-function #2: a snapshot of the "you've been away" gap that must be filled before the
+  // app is usable. Captured on open/foreground; cleared once every block in it is logged. Held as a
+  // stable snapshot so filling blocks out of order can't shrink the run and let you slip past.
+  const [forcedGap, setForcedGap] = useState<number[] | null>(null);
   const seededRef = useRef(false);
+
+  // Re-evaluate the on-open catch-up wall: if we're not already showing one and there's a run of
+  // ≥2 unlogged blocks trailing to now, snapshot it and force it. Called on mount + every foreground.
+  const evaluateCatchUp = useCallback(() => {
+    setForcedGap((cur) => {
+      if (cur != null) return cur; // already forcing — don't recompute mid-fill
+      const s = getState().settings;
+      const g = trailingGapSlots(
+        getState().entries,
+        s.wakeMinutes,
+        s.sleepMinutes,
+        s.trackingStartedAt,
+      );
+      return g.length >= 2 ? g : null;
+    });
+  }, []);
 
   // Bootstrap once: load state, set up notification channels, then arm the pings via the
   // native-first path (armPings picks native chooser vs expo-notifications by isAvailable()).
@@ -125,6 +150,7 @@ function Root() {
       await hydrate();
       await setupNotificationChannels();
       await armPings(getState().settings);
+      evaluateCatchUp();
       // If the app was cold-started by an "Other" tap on the popup, land on that slot's entry.
       const slot = await consumeLaunchSlot();
       if (slot != null) {
@@ -132,7 +158,7 @@ function Root() {
         setTab("today");
       }
     })();
-  }, []);
+  }, [evaluateCatchUp]);
 
   // Handle a direct-reply / tap from a notification.
   const handleResponse = useCallback((response: Notifications.NotificationResponse) => {
@@ -172,6 +198,7 @@ function Root() {
     const onChange = (next: AppStateStatus) => {
       if (next === "active") {
         void armPings(getState().settings);
+        evaluateCatchUp();
         // An "Other" tap that opened the app while it was already running lands here — focus the slot.
         void (async () => {
           const slot = await consumeLaunchSlot();
@@ -184,7 +211,7 @@ function Root() {
     };
     const sub = AppState.addEventListener("change", onChange);
     return () => sub.remove();
-  }, []);
+  }, [evaluateCatchUp]);
 
   // Re-arm whenever the ping settings change (interval / awake window / tracking toggle).
   // Deps are the raw values from useStore() so the effect fires on any of them. armPings is
@@ -224,57 +251,61 @@ function Root() {
   }
 
   return (
-    <View style={styles.appRoot}>
-      <View style={styles.screen}>
-        {tab === "today" ? (
-          <TodayScreen focusSlot={focusSlot} onOpenSettings={() => setShowSettings(true)} />
-        ) : (
-          <InsightsScreen />
-        )}
-      </View>
-
-      <View style={[styles.tabbar, { paddingBottom: insets.bottom + space.s1 }]}>
-        {TABS.map((t) => {
-          const active = tab === t.key;
-          return (
-            <PressableScale
-              key={t.key}
-              onPress={() => {
-                if (t.key === "today") setFocusSlot(null);
-                setTab(t.key);
+    <PermissionWall>
+      <View style={styles.appRoot}>
+        <View style={styles.screen}>
+          {tab === "today" ? (
+            <TodayScreen focusSlot={focusSlot} onOpenSettings={() => setTab("settings")} />
+          ) : tab === "categories" ? (
+            <CategoriesScreen />
+          ) : tab === "insights" ? (
+            <InsightsScreen onOpenSettings={() => setTab("settings")} />
+          ) : (
+            <SettingsScreen
+              onReset={() => {
+                setFocusSlot(null);
+                setTab("today");
               }}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: active }}
-              accessibilityLabel={t.label}
-              style={styles.tab}
-              scaleTo={0.9}
-            >
-              <Text style={[styles.tabIcon, active && styles.tabIconActive]}>{t.icon}</Text>
-              <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{t.label}</Text>
-            </PressableScale>
-          );
-        })}
-      </View>
+            />
+          )}
+        </View>
 
-      {/* Always-on feedback / share button, bottom-right over the tab screens. */}
-      <FeedbackFab />
+        <View style={[styles.tabbar, { paddingBottom: insets.bottom + space.s1 }]}>
+          {TABS.map((t) => {
+            const active = tab === t.key;
+            return (
+              <PressableScale
+                key={t.key}
+                onPress={() => {
+                  if (t.key === "today") setFocusSlot(null);
+                  setTab(t.key);
+                }}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={t.label}
+                style={styles.tab}
+                scaleTo={0.9}
+              >
+                <Text style={[styles.tabIcon, active && styles.tabIconActive]}>{t.icon}</Text>
+                <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{t.label}</Text>
+              </PressableScale>
+            );
+          })}
+        </View>
 
-      {/* Settings — a dismissible full-screen modal opened by the Today header gear. */}
-      <Modal
-        visible={showSettings}
-        animationType="slide"
-        onRequestClose={() => setShowSettings(false)}
-      >
-        <SettingsScreen
-          onClose={() => setShowSettings(false)}
-          onReset={() => {
-            setShowSettings(false);
-            setFocusSlot(null);
-            setTab("today");
-          }}
+        {/* Always-on feedback / share button, bottom-right over the tab screens. */}
+        <FeedbackFab />
+
+        {/* Forcing-function #2: the on-open catch-up wall — can't be dismissed until the whole
+            "you've been away" run is logged. Cleared once every block in the snapshot is filled. */}
+        <CatchUpModal
+          visible={forcedGap != null}
+          slots={forcedGap ?? []}
+          mandatory
+          onClose={() => setForcedGap(null)}
         />
-      </Modal>
-    </View>
+      </View>
+    </PermissionWall>
   );
 }
 
