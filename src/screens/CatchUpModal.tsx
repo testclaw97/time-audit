@@ -5,7 +5,7 @@
 // fill the whole span in two taps. Erase clears a mistake. Everything commits live to the store,
 // so there is no "unsaved" state to lose.
 import React, { useMemo, useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space, type } from "../theme";
 import PressableScale from "../ui/PressableScale";
@@ -27,8 +27,15 @@ export default function CatchUpModal({
   onClose: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const { settings, entries } = useStore();
   const cats = settings.categories;
+
+  // Fixed cell width (3 columns). MUST be an absolute number, not a "%" — PressableScale forwards
+  // width to its outer wrapper AND applies the style to the inner view, so a percentage would be
+  // taken twice (31% of 31%) and crush the label. An identical absolute px on both layers lines up.
+  const GRID_PAD = space.s3 * 2 + space.s1 * 2; // sheet h-padding + 2 inter-column gaps
+  const cellW = Math.floor((width - GRID_PAD) / 3);
 
   // The active brush — a category id (default: first category) or ERASE. Persists across taps,
   // so filling N blocks with the same thing is N taps, not N×(open modal + pick + close).
@@ -150,6 +157,7 @@ export default function CatchUpModal({
               return (
                 <Cell
                   key={slot}
+                  w={cellW}
                   time={formatClock(slot)}
                   endTime={formatClock(slot + slotMs)}
                   label={label}
@@ -222,6 +230,7 @@ export default function CatchUpModal({
 }
 
 function Cell({
+  w,
   time,
   endTime,
   label,
@@ -231,6 +240,7 @@ function Cell({
   inPendingRange,
   onPress,
 }: {
+  w: number;
   time: string;
   endTime: string;
   label: string | null;
@@ -247,6 +257,7 @@ function Cell({
       accessibilityLabel={logged ? `${time}, logged as ${label}. Tap to change.` : `${time}, tap to log`}
       style={[
         styles.cell,
+        { width: w },
         logged && { backgroundColor: (color ?? colors.teal) + "22", borderColor: (color ?? colors.teal) + "88" },
         isAnchor && styles.cellAnchor,
         inPendingRange && styles.cellInRange,
@@ -340,7 +351,6 @@ const styles = StyleSheet.create({
   gridScroll: { flexGrow: 0 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: space.s1, paddingBottom: space.s1 },
   cell: {
-    width: "31%",
     minHeight: 58,
     borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
