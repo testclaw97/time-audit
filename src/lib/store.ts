@@ -43,6 +43,8 @@ export interface Settings {
   pausedUntil: number; // epoch ms popups are snoozed until; 0 = not paused
   lockScreenPopup: boolean; // show the full-screen popup over the LOCK SCREEN (default true; a choice)
   oemSetupConfirmed: boolean; // user confirmed they enabled the OEM (MIUI/Samsung) extra switches
+  autostartDone: boolean; // user marked the (unverifiable) Android autostart switch as enabled
+  popupDone: boolean; // user marked the (unverifiable) Android background-popup switch as enabled
   trackingStartedAt: number; // epoch ms tracking began; catch-up ignores blocks before this (0 = unset)
 }
 
@@ -81,6 +83,8 @@ const DEFAULT_SETTINGS: Settings = {
   pausedUntil: 0,
   lockScreenPopup: true,
   oemSetupConfirmed: false,
+  autostartDone: false,
+  popupDone: false,
   trackingStartedAt: 0,
 };
 
@@ -291,6 +295,42 @@ export async function addCategory(partial: {
     kind: partial.kind ?? "shallow",
   };
   await commitCategories([...state.settings.categories, cat]);
+  return cat;
+}
+
+// Palette for auto-created categories (from a custom "Other" entry). Cycled by category count so
+// new ones don't all look the same.
+const AUTO_SWATCHES = [
+  "#f5a623", "#ff5d6c", "#38c8b0", "#6c8cff", "#b98cff",
+  "#ffb84d", "#7bd88f", "#ff9f43", "#4dd0e1", "#8a94a6",
+];
+
+/**
+ * Log a CUSTOM typed label for a slot AND remember it as a category (TJ, 2026-08-28): typing your
+ * own answer once adds it to the category list so it's a one-tap chip next time. Reuses an existing
+ * category if the label already matches one (case-insensitive) so we don't create duplicates.
+ */
+export async function logCustomAndSaveCategory(
+  text: string,
+  slotStart: number,
+): Promise<Category | null> {
+  const clean = text.trim();
+  if (clean.length === 0) {
+    await logEntry("", slotStart);
+    return null;
+  }
+  const existing = state.settings.categories.find(
+    (c) => c.label.trim().toLowerCase() === clean.toLowerCase(),
+  );
+  const cat =
+    existing ??
+    (await addCategory({
+      label: clean,
+      emoji: "📝",
+      color: AUTO_SWATCHES[state.settings.categories.length % AUTO_SWATCHES.length],
+      kind: "shallow",
+    }));
+  await logEntry(clean, slotStart, cat.id);
   return cat;
 }
 

@@ -14,7 +14,14 @@ import PressableScale from "../ui/PressableScale";
 import Button from "../ui/Button";
 import CatchUpModal from "./CatchUpModal";
 import type { Category } from "../lib/store";
-import { logEntry, logManyEntries, pausePopups, resumePopups, useStore } from "../lib/store";
+import {
+  logCustomAndSaveCategory,
+  logEntry,
+  logManyEntries,
+  pausePopups,
+  resumePopups,
+  useStore,
+} from "../lib/store";
 import {
   KIND_META,
   computeKindSplit,
@@ -224,6 +231,12 @@ export default function TodayScreen({
   const logEntryFor = (text: string, category?: string) => {
     if (logSlot == null) return;
     logEntry(text, logSlot, category);
+    closeLog();
+  };
+  // A custom typed label (not a chip) is saved as a new category so it's one-tap next time.
+  const logCustomFor = (text: string) => {
+    if (logSlot == null) return;
+    void logCustomAndSaveCategory(text, logSlot);
     closeLog();
   };
 
@@ -459,7 +472,7 @@ export default function TodayScreen({
                 onPickCategory={(c: Category) => logEntryFor(c.label, c.id)}
                 current={logModalCurrent}
                 onClear={() => logEntryFor("")}
-                onSubmit={(t: string) => logEntryFor(t)}
+                onSubmit={(t: string) => logCustomFor(t)}
               />
             ) : null}
           </View>

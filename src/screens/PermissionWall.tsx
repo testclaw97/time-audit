@@ -4,81 +4,70 @@
 // blocking wall instead of the app. Notifications + logging from OUTSIDE the app are unaffected;
 // this only gates the in-app experience. On web/iOS (no native module) the wall is a no-op.
 import React, { useCallback, useEffect, useState } from "react";
-import { AppState, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppState, Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space, type } from "../theme";
 import Card from "../ui/Card";
 import FadeIn from "../ui/FadeIn";
 import PressableScale from "../ui/PressableScale";
 import TimePing, { isAvailable } from "../../modules/time-ping";
+import { getNotifPermission, requestPermission } from "../lib/notifications";
 
-const OEM_BRANDS = /xiaomi|redmi|poco|samsung|oppo|realme|oneplus|vivo|huawei|honor/;
-
-type Perms = { overlay: boolean; exact: boolean; fsi: boolean };
+// The REQUIRED set — the app can't do its job without these, and they're all OS-verifiable, so we
+// re-check them on every foreground and re-prompt the moment one is turned off. (FSI / battery /
+// autostart / background-popup are OPTIONAL and live in onboarding + Settings, so they never block.)
+type Perms = { notifications: boolean; overlay: boolean; exact: boolean };
+type Which = keyof Perms;
 
 export default function PermissionWall({ children }: { children: React.ReactNode }) {
   // null = still checking (first paint); avoids a flash of the wall before the async check lands.
   const [perms, setPerms] = useState<Perms | null>(null);
-  const [manufacturer, setManufacturer] = useState("");
-  const isOem = OEM_BRANDS.test(manufacturer);
-  const brand = manufacturer
-    ? manufacturer.charAt(0).toUpperCase() + manufacturer.slice(1)
-    : "your phone";
+  const [notifCanAskAgain, setNotifCanAskAgain] = useState(true);
 
   const check = useCallback(async () => {
+    // Notifications works on every platform (expo-notifications); the rest are native-only.
+    let notifications = true;
+    try {
+      const r = await getNotifPermission();
+      notifications = r.granted;
+      setNotifCanAskAgain(r.canAskAgain);
+    } catch {
+      notifications = true; // never trap on a broken check
+    }
     if (!isAvailable() || !TimePing) {
-      // web / iOS: no special-access model — never block.
-      setPerms({ overlay: true, exact: true, fsi: true });
+      setPerms({ notifications, overlay: true, exact: true });
       return;
     }
     try {
-      const [overlay, exact, fsi] = await Promise.all([
+      const [overlay, exact] = await Promise.all([
         TimePing.hasOverlayPermission(),
         TimePing.hasExactAlarm(),
-        TimePing.hasFullScreenIntent(),
       ]);
-      setPerms({ overlay, exact, fsi });
+      setPerms({ notifications, overlay, exact });
     } catch {
-      // Never trap the user behind a broken check — fail open.
-      setPerms({ overlay: true, exact: true, fsi: true });
+      setPerms({ notifications, overlay: true, exact: true });
     }
   }, []);
 
   useEffect(() => {
     check();
-    void (async () => {
-      if (isAvailable() && TimePing) {
-        try {
-          setManufacturer((await TimePing.getManufacturer()) || "");
-        } catch {
-          /* ignore */
-        }
-      }
-    })();
     const sub = AppState.addEventListener("change", (s) => {
       if (s === "active") check();
     });
     return () => sub.remove();
   }, [check]);
 
-  const request = async (which: keyof Perms) => {
-    if (!isAvailable() || !TimePing) return;
+  const request = async (which: Which) => {
     try {
-      if (which === "overlay") await TimePing.requestOverlayPermission();
-      else if (which === "exact") await TimePing.requestExactAlarm();
-      else await TimePing.requestFullScreenIntent();
+      if (which === "notifications") {
+        if (notifCanAskAgain) await requestPermission();
+        else await Linking.openSettings();
+      } else if (isAvailable() && TimePing) {
+        if (which === "overlay") await TimePing.requestOverlayPermission();
+        else await TimePing.requestExactAlarm();
+      }
     } catch {
       /* the grant lands in a system screen; AppState 'active' re-checks on return */
-    }
-    check();
-  };
-
-  const openOem = async () => {
-    if (!isAvailable() || !TimePing) return;
-    try {
-      await TimePing.openOemAppPermissions();
-    } catch {
-      /* ignore */
     }
     check();
   };
@@ -87,8 +76,12 @@ export default function PermissionWall({ children }: { children: React.ReactNode
 
   // Still checking, or everything granted → render the app.
   if (!perms) return null;
-  const allGranted = perms.overlay && perms.exact && perms.fsi;
+  const allGranted = perms.notifications && perms.overlay && perms.exact;
   if (allGranted) return <>{children}</>;
+
+  // Some-but-not-all missing reads as a revocation ("turned off"); all missing reads as fresh setup.
+  const missingCount = [perms.notifications, perms.overlay, perms.exact].filter((x) => !x).length;
+  const oneMissing = missingCount > 0 && missingCount < 3;
 
   return (
     <ScrollView
@@ -100,18 +93,28 @@ export default function PermissionWall({ children }: { children: React.ReactNode
       showsVerticalScrollIndicator={false}
     >
       <FadeIn>
-        <Text style={styles.kicker}>ONE-TIME SETUP</Text>
+        <Text style={styles.kicker}>{oneMissing ? "PERMISSION TURNED OFF" : "PERMISSIONS NEEDED"}</Text>
         <Text style={[type.display, styles.title]}>
-          Finish setting up{"\n"}Time Audit.
+          {oneMissing ? "Time Audit is\npaused." : "Time Audit is\nlocked."}
         </Text>
         <Text style={[type.body, styles.lead]}>
-          Time Audit checks in with a full-screen popup — grant these so it can actually reach you.
-          Until then the app stays locked.
+          {oneMissing
+            ? "A permission Time Audit needs was turned off, so it can't reach you. Switch it back on to keep going."
+            : "Time Audit can't run until these are on. Grant them to unlock the app."}
         </Text>
       </FadeIn>
 
       <FadeIn delay={110}>
         <Card style={styles.permCard} tone="flat">
+          <PermRow
+            title="Notifications"
+            note="The check-in itself — how Time Audit reaches you every interval."
+            granted={perms.notifications}
+            onAllow={() => request("notifications")}
+            actionLabel={notifCanAskAgain ? "Allow" : "Open settings"}
+            testID="wall-notifications"
+          />
+          <View style={styles.divider} />
           <PermRow
             title="Display over other apps"
             note="Lets the check-in cover your screen while you're using the phone."
@@ -127,42 +130,13 @@ export default function PermissionWall({ children }: { children: React.ReactNode
             onAllow={() => request("exact")}
             testID="wall-exact"
           />
-          <View style={styles.divider} />
-          <PermRow
-            title="Show over lock screen"
-            note="Lets the check-in appear even when your phone is locked."
-            granted={perms.fsi}
-            onAllow={() => request("fsi")}
-            testID="wall-fsi"
-          />
         </Card>
       </FadeIn>
 
-      {isOem ? (
-        <FadeIn delay={170}>
-          <Card tone="accent" style={styles.oemCard}>
-            <Text style={styles.oemHeader}>ALSO ON {brand.toUpperCase()}</Text>
-            <Text style={[type.caption, styles.oemBody]}>
-              {brand} hides extra switches Android's permissions don't cover. Turn ON "Display
-              pop-up while running in background", "Show on lock screen", and Autostart — or the
-              popup gets silently blocked.
-            </Text>
-            <PressableScale
-              onPress={openOem}
-              accessibilityLabel={`Open ${brand} permissions`}
-              style={styles.oemBtn}
-              scaleTo={0.98}
-            >
-              <Text style={styles.oemBtnText}>Open {brand} permissions ›</Text>
-            </PressableScale>
-          </Card>
-        </FadeIn>
-      ) : null}
-
       <FadeIn delay={230}>
         <Text style={styles.footNote}>
-          The app unlocks the moment these are on. Check-ins and one-tap logging from the
-          notification keep working regardless.
+          The app unlocks the moment these are on. More reliability options (battery, autostart,
+          lock-screen popup) live in Settings.
         </Text>
       </FadeIn>
     </ScrollView>
@@ -174,12 +148,14 @@ function PermRow({
   note,
   granted,
   onAllow,
+  actionLabel = "Allow",
   testID,
 }: {
   title: string;
   note: string;
   granted: boolean;
   onAllow: () => void;
+  actionLabel?: string;
   testID?: string;
 }) {
   return (
@@ -191,11 +167,11 @@ function PermRow({
         ) : (
           <PressableScale
             onPress={onAllow}
-            accessibilityLabel={`Allow ${title}`}
+            accessibilityLabel={`${actionLabel} ${title}`}
             style={styles.allowBtn}
             testID={testID}
           >
-            <Text style={styles.allowText}>Allow</Text>
+            <Text style={styles.allowText}>{actionLabel}</Text>
           </PressableScale>
         )}
       </View>

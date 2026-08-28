@@ -64,6 +64,9 @@ object PingStore {
     /** Notification quick-action broadcast: "log this category for this slot" (no chooser). */
     const val ACTION_PICK = "agency.lumieremedia.timeaudit.timeping.ACTION_PICK"
 
+    /** From the check-in notification's "Other" button — open the app to type a custom label. */
+    const val ACTION_OTHER = "agency.lumieremedia.timeaudit.timeping.ACTION_OTHER"
+
     // --- [PingService] intent actions (the persistent FGS command surface) --------------
     // The service is a single long-lived process anchor poked by distinct actions rather than a
     // fleet of transient services. See [PingService.onStartCommand] for the handlers.

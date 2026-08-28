@@ -245,8 +245,10 @@ class PingService : Service() {
         // (no overlay, no FSI, no exact-alarm) — it is the guaranteed way to log even when every
         // upgrade is unavailable, so it must never fail.
         try {
+            // Up to 3 top categories as one-tap logs, then an "Other" button that opens the app to
+            // type a custom label (Android shows ~3-4 actions; keeping a slot for Other matters).
             val cats = PingStore.getCategories(this)
-            for ((i, cat) in cats.take(4).withIndex()) {
+            for ((i, cat) in cats.take(3).withIndex()) {
                 val pickIntent = Intent(this, PingReceiver::class.java).apply {
                     action = PingStore.ACTION_PICK
                     putExtra(PingStore.EXTRA_CATEGORY, cat.id)
@@ -258,6 +260,16 @@ class PingService : Service() {
                 )
                 builder.addAction(0, "${cat.emoji} ${cat.label}", pickPI)
             }
+            // "📝 Other" — open the app to log a custom label for this slot (saved as a category).
+            val otherIntent = Intent(this, PingReceiver::class.java).apply {
+                action = PingStore.ACTION_OTHER
+                putExtra(PingStore.EXTRA_SLOT_START, slotStart)
+            }
+            val otherPI = PendingIntent.getBroadcast(
+                this, REQ_OTHER, otherIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(0, "📝 Other", otherPI)
         } catch (_: Throwable) {
             // Even with no category buttons the notice still surfaces the question + opens the app.
         }
@@ -557,6 +569,7 @@ class PingService : Service() {
         private const val REQ_ALIVE_CONTENT = 48000
         private const val REQ_FSI = 48001
         private const val REQ_PICK_BASE = 48010
+        private const val REQ_OTHER = 48020
 
         /**
          * Whether the persistent engine process anchor is alive. Set true in [onCreate], false in

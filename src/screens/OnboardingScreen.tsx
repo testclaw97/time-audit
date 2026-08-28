@@ -18,6 +18,7 @@ import Button from "../ui/Button";
 import FadeIn from "../ui/FadeIn";
 import TimeField from "../ui/TimeField";
 import PressableScale from "../ui/PressableScale";
+import AndroidExtraRow from "../ui/AndroidExtraRow";
 import { updateSettings, useStore } from "../lib/store";
 import TimePing, { isAvailable } from "../../modules/time-ping";
 import {
@@ -66,11 +67,11 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const windowMinutes = (sleep - wake + 24 * 60) % (24 * 60) || 24 * 60;
   const pingsPerDay = Math.floor(windowMinutes / interval);
 
-  // Mandatory gate (TJ, 2026-08-28): you can't start until the app can actually run its check-in —
-  // notifications, display-over-other-apps, exact alarms, and lock-screen/full-screen. The same set
-  // is re-enforced on every open by PermissionWall. (Battery + the OEM switches stay optional here
-  // because the app can't verify them.) On web/iOS these don't exist, so refreshPerms marks them ok.
-  const essentialsGranted = notifGranted && overlayGranted && exactGranted && fsiGranted;
+  // Mandatory gate (TJ, 2026-08-28): you can't start until the app can run its check-in —
+  // notifications, display-over-other-apps, and exact alarms. The SAME three are re-enforced on
+  // every open by PermissionWall. Everything else (lock-screen/FSI, battery, Android autostart &
+  // background-popup) is OPTIONAL below. On web/iOS these don't exist, so refreshPerms marks them ok.
+  const essentialsGranted = notifGranted && overlayGranted && exactGranted;
   const isOem = OEM_BRANDS.test(manufacturer);
   const brand = manufacturer
     ? manufacturer.charAt(0).toUpperCase() + manufacturer.slice(1)
@@ -185,6 +186,10 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
     runNative(() => TimePing!.requestBatteryExemption(), "requestBatteryExemption");
   const openOemPerms = () =>
     runNative(() => TimePing!.openOemAppPermissions(), "openOemAppPermissions");
+  const openAutostart = () =>
+    runNative(() => TimePing!.openOemAutostart(), "openOemAutostart");
+  const toggleAutostartDone = () => void updateSettings({ autostartDone: !settings.autostartDone });
+  const togglePopupDone = () => void updateSettings({ popupDone: !settings.popupDone });
 
   // Finish: NOW persist onboarded/tracking + the window/interval and (re)arm pings. Setting
   // onboarded flips App back to the tabs; onDone() lands the user on Today.
@@ -268,46 +273,54 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
               onAllow={allowExact}
               testID="allow-exact"
             />
-            <View style={styles.permDivider} />
-            <PermRow
-              title="Show over lock screen"
-              note="Lets the check-in appear even when your phone is locked."
-              granted={fsiGranted}
-              onAllow={allowFsi}
-              testID="allow-fsi"
-            />
           </Card>
         </FadeIn>
 
-        <FadeIn delay={230}>
-          <Text style={[type.label, styles.sectionLabel]}>OPTIONAL · MORE RELIABLE</Text>
-          <Card tone="flat" style={styles.permStatusCard}>
-            <Text style={[type.caption, styles.optIntro]}>
-              Not required to start, but strongly recommended — these help pings survive aggressive
-              battery-saving and OEM app-killing.
-            </Text>
-            <View style={styles.permDivider} />
-            <PermRow
-              title="Battery: no restrictions"
-              note="Stops the system delaying or killing pings in the background."
-              granted={batteryGranted}
-              onAllow={allowBattery}
-              testID="allow-battery"
-            />
-            {isOem ? (
-              <>
-                <View style={styles.permDivider} />
-                <OemAction
-                  n="⚙"
-                  title={`${brand}: autostart & pop-up`}
-                  hint={'Turn ON Autostart so it can wake to ping you — plus "Display pop-up" / "Show on lock screen" if you want the popup.'}
-                  onPress={openOemPerms}
-                  testID="oem-app-permissions"
-                />
-              </>
-            ) : null}
-          </Card>
-        </FadeIn>
+        {native ? (
+          <FadeIn delay={230}>
+            <Text style={[type.label, styles.sectionLabel]}>OPTIONAL · MORE RELIABLE</Text>
+            <Card tone="flat" style={styles.permStatusCard}>
+              <Text style={[type.caption, styles.optIntro]}>
+                Not required to start, but recommended — these help pings survive battery-saving and
+                Android killing the app in the background.
+              </Text>
+              <View style={styles.permDivider} />
+              <PermRow
+                title="Show over lock screen"
+                note="Lets the check-in appear even when your phone is locked."
+                granted={fsiGranted}
+                onAllow={allowFsi}
+                testID="allow-fsi"
+              />
+              <View style={styles.permDivider} />
+              <PermRow
+                title="Battery: no restrictions"
+                note="Stops the system delaying or killing pings in the background."
+                granted={batteryGranted}
+                onAllow={allowBattery}
+                testID="allow-battery"
+              />
+              <View style={styles.permDivider} />
+              <AndroidExtraRow
+                title="Android autostart"
+                note="Let Time Audit wake itself to ping you after a reboot or when killed."
+                done={settings.autostartDone}
+                onOpen={openAutostart}
+                onToggleDone={toggleAutostartDone}
+                testID="android-autostart"
+              />
+              <View style={styles.permDivider} />
+              <AndroidExtraRow
+                title="Android background pop-up"
+                note='Some Androids hide a "show pop-up while in background" switch — on = the full popup can appear.'
+                done={settings.popupDone}
+                onOpen={openOemPerms}
+                onToggleDone={togglePopupDone}
+                testID="android-popup"
+              />
+            </Card>
+          </FadeIn>
+        ) : null}
 
         <FadeIn delay={350}>
           <Button

@@ -94,9 +94,19 @@ export default function CategoriesScreen() {
 
       <FadeIn delay={70}>
         <Card padded={false}>
+          <PressableScale
+            onPress={() => setEditor({ mode: "add", label: "", emoji: "", color: SWATCHES[0], kind: "shallow" })}
+            accessibilityLabel="Add category"
+            style={styles.catRow}
+          >
+            <View style={styles.addPlus}>
+              <Text style={styles.addPlusText}>＋</Text>
+            </View>
+            <Text style={[type.bodyStrong, styles.addLabel]}>Add category</Text>
+          </PressableScale>
           {settings.categories.map((cat, i) => (
             <View key={cat.id}>
-              {i > 0 ? <View style={styles.catDivider} /> : null}
+              <View style={styles.catDivider} />
               <View style={styles.catRow}>
                 <PressableScale
                   onPress={() =>
@@ -134,17 +144,6 @@ export default function CategoriesScreen() {
               </View>
             </View>
           ))}
-          <View style={styles.catDivider} />
-          <PressableScale
-            onPress={() => setEditor({ mode: "add", label: "", emoji: "", color: SWATCHES[0], kind: "shallow" })}
-            accessibilityLabel="Add category"
-            style={styles.catRow}
-          >
-            <View style={styles.addPlus}>
-              <Text style={styles.addPlusText}>＋</Text>
-            </View>
-            <Text style={[type.bodyStrong, styles.addLabel]}>Add category</Text>
-          </PressableScale>
         </Card>
         <PressableScale onPress={confirmReset} accessibilityLabel="Reset categories to defaults" style={styles.resetRow}>
           <Text style={styles.resetText}>Reset to defaults</Text>

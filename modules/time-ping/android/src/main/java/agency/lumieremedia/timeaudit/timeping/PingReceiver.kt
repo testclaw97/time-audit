@@ -64,6 +64,24 @@ class PingReceiver : BroadcastReceiver() {
                     // The user answered from the shade — take the check-in notice down.
                     NotificationManagerCompat.from(context).cancel(PingStore.CHECKIN_NOTIF_ID)
                 }
+
+                PingStore.ACTION_OTHER -> {
+                    // "Other" on the notification: stash the slot so the app opens quick-entry for it,
+                    // open the app, and clear the check-in notice. Nothing is logged here — the user
+                    // types a custom label in-app (which is then saved as a category).
+                    val slotStart = intent.getLongExtra(PingStore.EXTRA_SLOT_START, 0L)
+                    try {
+                        PingStore.setFocusSlot(context, slotStart)
+                        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                        if (launch != null) {
+                            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            launch.putExtra(PingStore.EXTRA_SLOT_START, slotStart)
+                            context.startActivity(launch)
+                        }
+                    } catch (_: Throwable) {
+                    }
+                    NotificationManagerCompat.from(context).cancel(PingStore.CHECKIN_NOTIF_ID)
+                }
             }
         } catch (_: Throwable) {
             // Never let a ping crash the app.

@@ -19,10 +19,12 @@ import FadeIn from "../ui/FadeIn";
 import TimeField from "../ui/TimeField";
 import PressableScale from "../ui/PressableScale";
 import Button from "../ui/Button";
+import AndroidExtraRow from "../ui/AndroidExtraRow";
 import type { Category } from "../lib/store";
 import {
   addCategory,
   clearAllData,
+  clearAllEntries,
   pausePopups,
   removeCategory,
   reorderCategories,
@@ -88,6 +90,7 @@ export default function SettingsScreen({
   const { settings } = useStore();
   const [scheduled, setScheduled] = useState<number | null>(null);
   const [armed, setArmed] = useState(false);
+  const [armedLogs, setArmedLogs] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [perms, setPerms] = useState<Perms>({ overlay: true, exact: true, fsi: true, battery: true });
   const [engineRunning, setEngineRunning] = useState<boolean | null>(null);
@@ -171,6 +174,22 @@ export default function SettingsScreen({
     const id = setTimeout(() => setArmed(false), 4000);
     return () => clearTimeout(id);
   }, [armed]);
+
+  useEffect(() => {
+    if (!armedLogs) return;
+    const id = setTimeout(() => setArmedLogs(false), 4000);
+    return () => clearTimeout(id);
+  }, [armedLogs]);
+
+  // Clear only the logged entries (every day's data) — keeps your categories, window and setup.
+  const clearLogs = async () => {
+    if (!armedLogs) {
+      setArmedLogs(true);
+      return;
+    }
+    setArmedLogs(false);
+    await clearAllEntries();
+  };
 
   const windowMinutes =
     (settings.sleepMinutes - settings.wakeMinutes + 24 * 60) % (24 * 60) || 24 * 60;
@@ -297,6 +316,8 @@ export default function SettingsScreen({
   const toggleLockScreen = () => {
     void updateSettings({ lockScreenPopup: !settings.lockScreenPopup });
   };
+  const toggleAutostartDone = () => void updateSettings({ autostartDone: !settings.autostartDone });
+  const togglePopupDone = () => void updateSettings({ popupDone: !settings.popupDone });
 
   return (
     <ScrollView
@@ -503,25 +524,29 @@ export default function SettingsScreen({
           </Text>
         )}
 
-        {native && isOem ? (
-          <Card tone="accent" style={styles.oemCard}>
-            <Text style={styles.oemHeader}>{brand.toUpperCase()} EXTRA SWITCHES</Text>
+        {native ? (
+          <Card tone="flat" style={styles.oemCard}>
+            <Text style={styles.oemHeader}>ANDROID EXTRAS (OPTIONAL)</Text>
             <Text style={[type.caption, styles.oemBody]}>
-              Standard Android permissions aren't enough on {brand} — turn these on or the popup
-              gets silently blocked.
+              Some Androids hide extra switches the app can't read. Turn them on for the most
+              reliable pings, then mark them done.
             </Text>
-            <Button
-              label="Pop-up & lock-screen permissions"
-              variant="ghost"
-              onPress={openOemPerms}
-              testID="oem-app-permissions"
+            <AndroidExtraRow
+              title="Android autostart"
+              note="Let Time Audit wake itself to ping you after a reboot or when killed."
+              done={settings.autostartDone}
+              onOpen={openAutostart}
+              onToggleDone={toggleAutostartDone}
+              testID="android-autostart"
             />
-            <Button label="Autostart" variant="ghost" onPress={openAutostart} testID="oem-autostart" />
-            <Button
-              label="Battery: No restrictions"
-              variant="ghost"
-              onPress={openOemBattery}
-              testID="oem-battery"
+            <View style={styles.divider} />
+            <AndroidExtraRow
+              title="Android background pop-up"
+              note='A "show pop-up while in background" switch some skins hide — on = the full popup can appear.'
+              done={settings.popupDone}
+              onOpen={openOemPerms}
+              onToggleDone={togglePopupDone}
+              testID="android-popup"
             />
           </Card>
         ) : null}
@@ -563,13 +588,23 @@ export default function SettingsScreen({
       <FadeIn delay={370}>
         <Text style={[type.label, styles.sectionLabel]}>DANGER ZONE</Text>
         <Button
+          label={armedLogs ? "Tap again to clear all logs" : "Clear logged data"}
+          variant="ghost"
+          onPress={clearLogs}
+          testID="clear-logs"
+        />
+        <Text style={styles.hint}>
+          Wipes every logged block (all days) but keeps your categories, window and settings.
+        </Text>
+        <View style={styles.dangerGap} />
+        <Button
           label={armed ? "Tap again to erase everything" : "Clear all data"}
           variant="danger"
           onPress={clearData}
           testID="clear-data"
         />
         <Text style={styles.hint}>
-          Deletes every logged slot and resets the app. This can't be undone.
+          Deletes every logged slot AND resets the app to a fresh install. This can't be undone.
         </Text>
       </FadeIn>
 
@@ -750,6 +785,7 @@ const styles = StyleSheet.create({
   rowSub: { color: colors.muted, marginTop: 2 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line, marginVertical: space.s0 },
   hint: { ...type.caption, color: colors.muted, marginTop: space.s1 },
+  dangerGap: { height: space.s2 },
   note: { color: colors.fg2, lineHeight: 20 },
   version: { ...type.caption, color: colors.faint, textAlign: "center", marginTop: space.s4 },
 
