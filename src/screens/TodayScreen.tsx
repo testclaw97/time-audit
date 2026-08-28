@@ -12,6 +12,7 @@ import FadeIn from "../ui/FadeIn";
 import QuickEntry from "../ui/QuickEntry";
 import PressableScale from "../ui/PressableScale";
 import Button from "../ui/Button";
+import CatchUpModal from "./CatchUpModal";
 import type { Category } from "../lib/store";
 import { logEntry, logManyEntries, pausePopups, resumePopups, useStore } from "../lib/store";
 import {
@@ -62,6 +63,7 @@ export default function TodayScreen({
   const [now, setNow] = useState(() => new Date());
   const [logSlot, setLogSlot] = useState<number | null>(null); // slot open in the log modal
   const [showPause, setShowPause] = useState(false);
+  const [showCatchUp, setShowCatchUp] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [overlayNeeded, setOverlayNeeded] = useState(false);
   const [fsiNeeded, setFsiNeeded] = useState(false);
@@ -195,6 +197,19 @@ export default function TodayScreen({
     void logManyEntries(trailingGap, cat.label, cat.id);
   };
 
+  // Blocks the "Catch up" grid shows: every elapsed block today from when tracking began through
+  // the current slot (logged + unlogged), so a mixed gap ("meeting, then email, then calls") can be
+  // filled with a persistent category brush + range fill instead of a modal per block.
+  const catchUpSlots = useMemo(() => {
+    const startBoundary =
+      settings.trackingStartedAt > 0 ? slotStartFor(settings.trackingStartedAt) : 0;
+    return slots.filter((s) => s <= currentSlot && s >= startBoundary);
+  }, [slots, currentSlot, settings.trackingStartedAt]);
+  const unloggedElapsed = useMemo(
+    () => catchUpSlots.filter((s) => !entries[String(s)]?.text?.trim()).length,
+    [catchUpSlots, entries],
+  );
+
   // ---- log modal ----
   const openLog = (slot: number) => setLogSlot(slotStartFor(slot));
   const closeLog = () => setLogSlot(null);
@@ -305,7 +320,14 @@ export default function TodayScreen({
                 </PressableScale>
               ))}
             </View>
-            <Text style={styles.catchUpHint}>Different things? Tap each block below instead.</Text>
+            <PressableScale
+              onPress={() => setShowCatchUp(true)}
+              accessibilityLabel="Log the gap in detail with different categories"
+              style={styles.catchUpDetail}
+              scaleTo={0.98}
+            >
+              <Text style={styles.catchUpDetailText}>Different things? Log in detail →</Text>
+            </PressableScale>
           </Card>
         </FadeIn>
       ) : null}
@@ -355,7 +377,19 @@ export default function TodayScreen({
 
       {/* Timeline — tap a block to log/fill it */}
       <View style={styles.timeline}>
-        <Text style={[type.label, styles.timelineLabel]}>YOUR DAY · tap a block to log</Text>
+        <View style={styles.timelineHead}>
+          <Text style={[type.label, styles.timelineLabel]}>YOUR DAY · tap a block to log</Text>
+          {unloggedElapsed >= 2 ? (
+            <PressableScale
+              onPress={() => setShowCatchUp(true)}
+              accessibilityLabel={`Catch up ${unloggedElapsed} unlogged blocks fast`}
+              style={styles.catchUpBtn}
+              scaleTo={0.94}
+            >
+              <Text style={styles.catchUpBtnText}>⚡ Catch up {unloggedElapsed}</Text>
+            </PressableScale>
+          ) : null}
+        </View>
         {shownRows.length === 0 ? (
           <Card tone="flat" style={styles.empty}>
             <Text style={styles.emptyIcon}>🕒</Text>
@@ -419,6 +453,9 @@ export default function TodayScreen({
           </View>
         </View>
       </Modal>
+
+      {/* Fast catch-up grid — brush a category across many blocks / range-fill a span */}
+      <CatchUpModal visible={showCatchUp} slots={catchUpSlots} onClose={() => setShowCatchUp(false)} />
 
       {/* Pause popups sheet */}
       <Modal visible={showPause} transparent animationType="slide" onRequestClose={() => setShowPause(false)}>
@@ -648,7 +685,8 @@ const styles = StyleSheet.create({
   },
   catchUpEmoji: { fontSize: 15 },
   catchUpChipText: { color: colors.fg2, fontWeight: "700", fontSize: 13, maxWidth: 120 },
-  catchUpHint: { ...type.caption, color: colors.muted, marginTop: space.s0 },
+  catchUpDetail: { alignSelf: "flex-start", marginTop: space.s1, paddingVertical: space.s0 },
+  catchUpDetailText: { ...type.caption, color: colors.accent2, fontWeight: "800" },
 
   // hero
   hero: { paddingVertical: space.s3, gap: space.s1 },
@@ -678,7 +716,22 @@ const styles = StyleSheet.create({
 
   // timeline
   timeline: { gap: space.s0, marginTop: space.s1 },
-  timelineLabel: { color: colors.muted, marginBottom: space.s1 },
+  timelineHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: space.s1,
+  },
+  timelineLabel: { color: colors.muted, flexShrink: 1 },
+  catchUpBtn: {
+    paddingHorizontal: space.s1 + 2,
+    paddingVertical: space.s0 + 1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentSoft,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accentLine,
+  },
+  catchUpBtnText: { ...type.caption, color: colors.accent2, fontWeight: "800" },
   empty: { alignItems: "center", paddingVertical: space.s4, gap: space.s1 },
   emptyIcon: { fontSize: 30, marginBottom: space.s0 },
   emptyTitle: { color: colors.fg },
