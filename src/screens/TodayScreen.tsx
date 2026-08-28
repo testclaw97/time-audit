@@ -4,7 +4,7 @@
 // timeline where tapping any block opens a modal to log/fill it. Settings + pause live in the
 // header (gear + bell); the old always-on "what are you doing?" picker is gone by design.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppState, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space, type } from "../theme";
 import Card from "../ui/Card";
@@ -23,6 +23,7 @@ import {
   todayKeys,
 } from "../lib/insights";
 import TimePing, { isAvailable } from "../../modules/time-ping";
+import { getNotifPermission, requestPermission } from "../lib/notifications";
 import {
   formatClock,
   formatDuration,
@@ -65,14 +66,15 @@ export default function TodayScreen({
   const [showPause, setShowPause] = useState(false);
   const [showCatchUp, setShowCatchUp] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [overlayNeeded, setOverlayNeeded] = useState(false);
-  const [fsiNeeded, setFsiNeeded] = useState(false);
+  const [notifNeeded, setNotifNeeded] = useState(false);
+  const [notifCanAskAgain, setNotifCanAskAgain] = useState(true);
+  const [exactNeeded, setExactNeeded] = useState(false);
 
   const paused = settings.pausedUntil > nowMs;
-  // Nudge only when a NEEDED grant is missing: overlay is required (in-use popup); FSI is only
-  // needed if the user WANTS lock-screen popups (that toggle is on). Otherwise the popup works
-  // fine and the banner shouldn't nag.
-  const permNeeded = overlayNeeded || (fsiNeeded && settings.lockScreenPopup);
+  // Notification-first: the check-in only reaches you if notifications + exact alarms are on. Those
+  // are the ONLY grants worth nagging about — overlay/FSI are optional bonuses (Settings), so they
+  // never trigger this banner.
+  const permNeeded = notifNeeded || exactNeeded;
 
   // Keep the timeline + "now" live.
   useEffect(() => {
@@ -91,20 +93,22 @@ export default function TodayScreen({
     return () => clearInterval(id);
   }, [settings.pausedUntil]);
 
-  // Popup grants (overlay = in-use full-screen; FSI = over the lock screen). No-op on web/iOS.
+  // Essential grants for the check-in to reach you: notifications (the check-in itself) + exact
+  // alarms (on-time firing). No-op on web (no native / notifications there).
   const refreshPerms = useCallback(async () => {
+    try {
+      const { granted, canAskAgain } = await getNotifPermission();
+      setNotifNeeded(!granted);
+      setNotifCanAskAgain(canAskAgain);
+    } catch {
+      setNotifNeeded(false);
+    }
     if (!isAvailable() || !TimePing) {
-      setOverlayNeeded(false);
-      setFsiNeeded(false);
+      setExactNeeded(false);
       return;
     }
     try {
-      const [overlay, fsi] = await Promise.all([
-        TimePing.hasOverlayPermission(),
-        TimePing.hasFullScreenIntent(),
-      ]);
-      setOverlayNeeded(!overlay);
-      setFsiNeeded(!fsi);
+      setExactNeeded(!(await TimePing.hasExactAlarm()));
     } catch (e) {
       console.warn("[today] refreshPerms failed", e);
     }
@@ -119,10 +123,14 @@ export default function TodayScreen({
   }, [refreshPerms]);
 
   const requestMissing = async () => {
-    if (!isAvailable() || !TimePing) return;
     try {
-      if (overlayNeeded) await TimePing.requestOverlayPermission();
-      else await TimePing.requestFullScreenIntent();
+      if (notifNeeded) {
+        // Ask if the OS still will; otherwise the only recovery is the app's settings screen.
+        if (notifCanAskAgain) await requestPermission();
+        else await Linking.openSettings();
+      } else if (exactNeeded && isAvailable() && TimePing) {
+        await TimePing.requestExactAlarm();
+      }
     } catch (e) {
       console.warn("[today] requestMissing failed", e);
     }
@@ -277,11 +285,15 @@ export default function TodayScreen({
         <FadeIn>
           <PressableScale
             onPress={requestMissing}
-            accessibilityLabel="The popup can't fully work yet. Tap to enable."
+            accessibilityLabel="Check-ins are off. Tap to turn them on."
             style={styles.banner}
             scaleTo={0.99}
           >
-            <Text style={styles.bannerText}>⚠️ The popup can't fully work yet — tap to enable.</Text>
+            <Text style={styles.bannerText}>
+              {notifNeeded
+                ? "⚠️ Check-ins are off — tap to turn on notifications."
+                : "⚠️ Pings may land late — tap to allow exact alarms."}
+            </Text>
           </PressableScale>
         </FadeIn>
       ) : null}

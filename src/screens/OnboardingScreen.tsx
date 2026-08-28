@@ -8,7 +8,6 @@ import {
   Linking,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from "react-native";
@@ -57,6 +56,7 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const [overlayGranted, setOverlayGranted] = useState(false);
   const [exactGranted, setExactGranted] = useState(false);
   const [fsiGranted, setFsiGranted] = useState(false);
+  const [batteryGranted, setBatteryGranted] = useState(false);
   const [manufacturer, setManufacturer] = useState("");
   // On a native build the OEM gate depends on Build.MANUFACTURER, fetched async. Until it resolves
   // `isOem` is falsely false — so hold the finish button until we actually know, or a fast tap could
@@ -66,20 +66,18 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const windowMinutes = (sleep - wake + 24 * 60) % (24 * 60) || 24 * 60;
   const pingsPerDay = Math.floor(windowMinutes / interval);
 
-  // The hard-required grants that make the popup ACTUALLY WORK: notifications (the floor), display-
-  // over-other-apps (the full-screen popup while the phone's in use — the whole point of the app),
-  // and exact alarms (on-time firing). On an OEM skin the OEM switches are ALSO required (below).
-  // No one starts until the app can do its job (TJ, 2026-08-26). Lock-screen (FSI) stays OPTIONAL —
-  // TJ's explicit call. On web/iOS overlay/exact don't exist, so refreshPerms marks them satisfied.
-  const essentialsGranted = notifGranted && overlayGranted && exactGranted;
+  // Notification-first (2026-08-28, TJ): the reliable, works-on-every-phone path is the check-in
+  // NOTIFICATION (fires locked, in-use, screen-off; one tap logs). The full-screen popup takeover
+  // is a bonus that OEMs (MIUI etc.) silently block and Google Play rejects — so it NEVER gates
+  // onboarding. The only hard requirements are notifications (the check-in itself) + exact alarms
+  // (on-time firing). Overlay / lock-screen / autostart / battery are optional reliability boosters.
+  // On web/iOS exact doesn't exist, so refreshPerms marks it satisfied.
+  const essentialsGranted = notifGranted && exactGranted;
   const isOem = OEM_BRANDS.test(manufacturer);
   const brand = manufacturer
     ? manufacturer.charAt(0).toUpperCase() + manufacturer.slice(1)
     : "phone";
-  // On an OEM device the user must also confirm they flipped the MIUI/Samsung switches — the app
-  // physically can't read those ops, so confirmation is the only signal we get.
-  const canFinish =
-    essentialsGranted && manufacturerResolved && (!isOem || settings.oemSetupConfirmed);
+  const canFinish = essentialsGranted && manufacturerResolved;
 
   // Re-check every gate on entering step 2 + whenever we return to the foreground (the user grants
   // them in system Settings screens, so the values flip while we're backgrounded).
@@ -93,14 +91,16 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
     }
     if (isAvailable() && TimePing) {
       try {
-        const [overlay, exact, fsi] = await Promise.all([
+        const [overlay, exact, fsi, battery] = await Promise.all([
           TimePing.hasOverlayPermission(),
           TimePing.hasExactAlarm(),
           TimePing.hasFullScreenIntent(),
+          TimePing.hasBatteryExemption(),
         ]);
         setOverlayGranted(overlay);
         setExactGranted(exact);
         setFsiGranted(fsi);
+        setBatteryGranted(battery);
       } catch (e) {
         console.warn("[onboarding] refreshPerms failed", e);
       }
@@ -109,6 +109,7 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
       setOverlayGranted(true);
       setExactGranted(true);
       setFsiGranted(true);
+      setBatteryGranted(true);
     }
   }, []);
 
@@ -180,20 +181,10 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const allowOverlay = () =>
     runNative(() => TimePing!.requestOverlayPermission(), "requestOverlayPermission");
   const allowExact = () => runNative(() => TimePing!.requestExactAlarm(), "requestExactAlarm");
-  const allowFsi = () =>
-    runNative(() => TimePing!.requestFullScreenIntent(), "requestFullScreenIntent");
   const allowBattery = () =>
     runNative(() => TimePing!.requestBatteryExemption(), "requestBatteryExemption");
   const openOemPerms = () =>
     runNative(() => TimePing!.openOemAppPermissions(), "openOemAppPermissions");
-  const openAutostart = () => runNative(() => TimePing!.openOemAutostart(), "openOemAutostart");
-
-  const setLockScreen = (v: boolean) => {
-    void updateSettings({ lockScreenPopup: v });
-  };
-  const toggleOemConfirmed = () => {
-    void updateSettings({ oemSetupConfirmed: !settings.oemSetupConfirmed });
-  };
 
   // Finish: NOW persist onboarded/tracking + the window/interval and (re)arm pings. Setting
   // onboarded flips App back to the tabs; onDone() lands the user on Today.
@@ -233,15 +224,15 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
         <FadeIn>
           <Text style={styles.kicker}>ALMOST THERE</Text>
           <Text style={[type.display, styles.title]}>
-            Make the popup{"\n"}actually fire.
+            Turn on your{"\n"}check-ins.
           </Text>
         </FadeIn>
 
         <FadeIn delay={110}>
           <Card tone="accent" style={styles.promise}>
             <Text style={[type.body, styles.promiseText]}>
-              Grant these and the popup works properly — a full-screen check-in that actually lands.
-              Without them, Time Audit can't do its job, so they're required to start.
+              Every interval, Time Audit sends a check-in — tap a category right on it to log the
+              moment, even when your phone's locked. These two make that work.
             </Text>
           </Card>
         </FadeIn>
@@ -253,21 +244,13 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
               title="Notifications"
               note={
                 notifGranted || notifCanAskAgain
-                  ? "Lets the check-in reach you every interval."
+                  ? "The check-in itself — tap a category on it to log. This is how you use the app."
                   : "Blocked in Android. Tap Open settings → allow notifications, then come back."
               }
               granted={notifGranted}
               onAllow={allowNotifications}
               actionLabel={notifCanAskAgain ? "Allow" : "Open settings"}
               testID="allow-notifications"
-            />
-            <View style={styles.permDivider} />
-            <PermRow
-              title="Display over other apps"
-              note="Lets the check-in cover your screen as a full-screen popup — the whole point of the app."
-              granted={overlayGranted}
-              onAllow={allowOverlay}
-              testID="allow-overlay"
             />
             <View style={styles.permDivider} />
             <PermRow
@@ -281,89 +264,42 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
         </FadeIn>
 
         <FadeIn delay={230}>
-          <Text style={[type.label, styles.sectionLabel]}>LOCK SCREEN</Text>
-          <Card tone="flat" style={styles.lockCard}>
-            <View style={styles.lockRow}>
-              <View style={styles.lockText}>
-                <Text style={[type.bodyStrong, styles.lockTitle]}>Show over the lock screen</Text>
-                <Text style={[type.caption, styles.lockNote]}>
-                  Off = it only pops up while you're using the phone.
-                </Text>
-              </View>
-              <Switch
-                value={settings.lockScreenPopup}
-                onValueChange={setLockScreen}
-                trackColor={{ true: colors.accent, false: colors.surface3 }}
-                thumbColor="#fff"
-                accessibilityLabel="Show over the lock screen"
-                testID="toggle-lockscreen"
-              />
-            </View>
-            {settings.lockScreenPopup ? (
+          <Text style={[type.label, styles.sectionLabel]}>OPTIONAL · MORE RELIABLE</Text>
+          <Card tone="flat" style={styles.permStatusCard}>
+            <Text style={[type.caption, styles.optIntro]}>
+              Not required — the check-in works without these. They just help pings survive
+              aggressive battery-saving, and add a full-screen popup while you're using the phone.
+            </Text>
+            <View style={styles.permDivider} />
+            <PermRow
+              title="Battery: no restrictions"
+              note="Stops the system delaying or killing pings in the background."
+              granted={batteryGranted}
+              onAllow={allowBattery}
+              testID="allow-battery"
+            />
+            <View style={styles.permDivider} />
+            <PermRow
+              title="Full-screen popup (while in use)"
+              note="Bonus: covers your screen with the chooser while you're actively on the phone."
+              granted={overlayGranted}
+              onAllow={allowOverlay}
+              testID="allow-overlay"
+            />
+            {isOem ? (
               <>
                 <View style={styles.permDivider} />
-                <PermRow
-                  title="Show on the lock screen"
-                  note="Lets the popup appear even when your phone is locked."
-                  granted={fsiGranted}
-                  onAllow={allowFsi}
-                  testID="allow-fsi"
+                <OemAction
+                  n="⚙"
+                  title={`${brand}: autostart & pop-up`}
+                  hint={'Turn ON Autostart so it can wake to ping you — plus "Display pop-up" / "Show on lock screen" if you want the popup.'}
+                  onPress={openOemPerms}
+                  testID="oem-app-permissions"
                 />
               </>
             ) : null}
           </Card>
         </FadeIn>
-
-        {isOem ? (
-          <FadeIn delay={290}>
-            <Card tone="accent" style={styles.oemCard}>
-              <Text style={styles.oemBadge}>REQUIRED ON {brand.toUpperCase()}</Text>
-              <Text style={[type.heading, styles.oemTitle]}>
-                Your {brand} phone needs{"\n"}3 extra switches.
-              </Text>
-              <Text style={[type.body, styles.oemBody]}>
-                Android's normal permissions aren't enough on {brand} — without these, the popup is
-                silently blocked. Flip all three, then confirm below.
-              </Text>
-
-              <OemAction
-                n="1"
-                title="Pop-up & lock-screen permissions"
-                hint={'Turn ON "Display pop-up windows while running in the background" + "Show on lock screen".'}
-                onPress={openOemPerms}
-                testID="oem-app-permissions"
-              />
-              <OemAction
-                n="2"
-                title="Autostart"
-                hint="Enable Time Audit so it can wake itself to ping you."
-                onPress={openAutostart}
-                testID="oem-autostart"
-              />
-              <OemAction
-                n="3"
-                title="Battery: No restrictions"
-                hint="Stop the system from killing the ping engine in the background."
-                onPress={allowBattery}
-                testID="oem-battery"
-              />
-
-              <PressableScale
-                onPress={toggleOemConfirmed}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: settings.oemSetupConfirmed }}
-                accessibilityLabel="I've turned these on"
-                style={styles.checkRow}
-                testID="oem-confirm"
-              >
-                <View style={[styles.checkBox, settings.oemSetupConfirmed && styles.checkBoxOn]}>
-                  {settings.oemSetupConfirmed ? <Text style={styles.checkMark}>✓</Text> : null}
-                </View>
-                <Text style={[type.bodyStrong, styles.checkLabel]}>I've turned these on</Text>
-              </PressableScale>
-            </Card>
-          </FadeIn>
-        ) : null}
 
         <FadeIn delay={350}>
           <Button
@@ -377,7 +313,7 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
           <Text style={styles.privacy}>
             {canFinish
               ? "You can fine-tune all of this anytime in Settings."
-              : "Grant the required permissions to continue."}
+              : "Allow notifications + exact alarms to continue."}
           </Text>
         </FadeIn>
       </ScrollView>
@@ -404,17 +340,17 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
       <FadeIn delay={110}>
         <Card tone="accent" style={styles.promise}>
           <Text style={[type.body, styles.promiseText]}>
-            Every <Text style={styles.promiseStrong}>{interval} minutes</Text> the app pops up —
-            just tap what you're doing. Two seconds, even from your lock screen.
+            Every <Text style={styles.promiseStrong}>{interval} minutes</Text> the app checks in —
+            just tap what you're doing. Two seconds, one hand.
           </Text>
         </Card>
       </FadeIn>
 
       <FadeIn delay={180}>
         <Card style={styles.stepsCard} tone="flat">
-          <Step n="1" emoji="⏰" title="It pops up" body={`A full-screen chooser lands every ${interval} minutes while you're awake.`} />
+          <Step n="1" emoji="⏰" title="It checks in" body={`A check-in notification lands every ${interval} minutes while you're awake.`} />
           <View style={styles.divider} />
-          <Step n="2" emoji="👆" title="One tap to log" body="Tap a category — Work, Scrolling, Rest… Or type your own. Done in seconds." />
+          <Step n="2" emoji="👆" title="One tap to log" body="Tap a category right on it — Work, Scrolling, Rest… Or open the app to type your own." />
           <View style={styles.divider} />
           <Step n="3" emoji="📊" title="See the truth" body="Insights add up every block into an honest picture of where your week went." />
         </Card>
@@ -641,6 +577,7 @@ const styles = StyleSheet.create({
   permStatusTitle: { color: colors.fg, flex: 1, paddingRight: space.s2 },
   permStatusState: { fontWeight: "700" },
   permStatusNote: { color: colors.muted, marginTop: 2 },
+  optIntro: { color: colors.muted },
   permDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line, marginVertical: space.s1 },
   permAllowBtn: {
     paddingHorizontal: space.s2,
