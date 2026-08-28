@@ -40,8 +40,8 @@ const OEM_BRANDS = /xiaomi|redmi|poco|samsung|oppo|realme|oneplus|vivo|huawei|ho
 export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const insets = useSafeAreaInsets();
   const { settings } = useStore();
-  const [wake, setWake] = useState(7 * 60);
-  const [sleep, setSleep] = useState(23 * 60);
+  const [wake, setWake] = useState(8 * 60);
+  const [sleep, setSleep] = useState(22 * 60);
   const [interval, setInterval] = useState(15);
   const [busy, setBusy] = useState(false);
   // Two-step flow: "intro" collects the window/interval; "permission" is a MANDATORY gate. The

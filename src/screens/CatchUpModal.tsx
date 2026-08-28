@@ -43,6 +43,9 @@ export default function CatchUpModal({
   );
   const remaining = slots.length - loggedCount;
   const canLeave = !mandatory || remaining === 0;
+  // Show most-recent FIRST (current time at the top) — you fill down from now, no scrolling to reach
+  // the latest block. Only display order; all the fill logic is order-independent.
+  const rows = useMemo(() => [...slots].reverse(), [slots]);
 
   const assign = (slot: number) => {
     if (pick === ERASE) {
@@ -134,7 +137,7 @@ export default function CatchUpModal({
           contentContainerStyle={{ paddingBottom: space.s2 }}
           showsVerticalScrollIndicator={false}
         >
-          {slots.map((slot) => {
+          {rows.map((slot) => {
             const e = entries[String(slot)];
             const label = e?.text?.trim() ? e.text.trim() : null;
             const cat = e?.category ? catById.get(e.category) : undefined;

@@ -4,7 +4,7 @@
 // timeline where tapping any block opens a modal to log/fill it. Settings + pause live in the
 // header (gear + bell); the old always-on "what are you doing?" picker is gone by design.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AppState, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, AppState, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space, type } from "../theme";
 import Card from "../ui/Card";
@@ -15,6 +15,7 @@ import Button from "../ui/Button";
 import CatchUpModal from "./CatchUpModal";
 import type { Category } from "../lib/store";
 import {
+  clearDay,
   logCustomAndSaveCategory,
   logEntry,
   logManyEntries,
@@ -61,10 +62,13 @@ function msUntilNextWake(wakeMinutes: number): number {
 export default function TodayScreen({
   focusSlot,
   onOpenSettings,
+  onRequestCatchUp,
 }: {
   focusSlot?: number | null;
   /** Open the Settings modal (App.tsx wires this). */
   onOpenSettings?: () => void;
+  /** Ask App to (re-)open the mandatory catch-up wall — used after clearing the day. */
+  onRequestCatchUp?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { settings, entries } = useStore();
@@ -258,6 +262,26 @@ export default function TodayScreen({
   const resume = () => {
     void resumePopups();
     setShowPause(false);
+  };
+
+  // Clear today's entries so you can re-enter them; then re-open the catch-up wall on the now-empty
+  // day so you're prompted to fill it back in.
+  const clearToday = () => {
+    Alert.alert(
+      "Clear today's log?",
+      "Deletes everything you logged today so you can re-enter it. Earlier days are kept.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear today",
+          style: "destructive",
+          onPress: async () => {
+            await clearDay();
+            onRequestCatchUp?.();
+          },
+        },
+      ],
+    );
   };
 
   const dateLabel = now.toLocaleDateString(undefined, {
@@ -478,6 +502,16 @@ export default function TodayScreen({
           </View>
         </View>
       </Modal>
+
+      {/* Clear today's log so you can re-enter it (re-opens the catch-up wall on the empty day) */}
+      <PressableScale
+        onPress={clearToday}
+        accessibilityLabel="Clear today's log"
+        style={styles.clearDayBtn}
+        scaleTo={0.98}
+      >
+        <Text style={styles.clearDayText}>⟲ Clear today's log</Text>
+      </PressableScale>
 
       {/* Fast catch-up grid — brush a category across many blocks / range-fill a span */}
       <CatchUpModal visible={showCatchUp} slots={catchUpSlots} onClose={() => setShowCatchUp(false)} />
@@ -757,6 +791,8 @@ const styles = StyleSheet.create({
     borderColor: colors.accentLine,
   },
   catchUpBtnText: { ...type.caption, color: colors.accent2, fontWeight: "800" },
+  clearDayBtn: { alignSelf: "center", marginTop: space.s3, paddingVertical: space.s1, paddingHorizontal: space.s2 },
+  clearDayText: { ...type.caption, color: colors.muted, fontWeight: "700" },
   empty: { alignItems: "center", paddingVertical: space.s4, gap: space.s1 },
   emptyIcon: { fontSize: 30, marginBottom: space.s0 },
   emptyTitle: { color: colors.fg },

@@ -255,7 +255,11 @@ function Root() {
       <View style={styles.appRoot}>
         <View style={styles.screen}>
           {tab === "today" ? (
-            <TodayScreen focusSlot={focusSlot} onOpenSettings={() => setTab("settings")} />
+            <TodayScreen
+              focusSlot={focusSlot}
+              onOpenSettings={() => setTab("settings")}
+              onRequestCatchUp={evaluateCatchUp}
+            />
           ) : tab === "categories" ? (
             <CategoriesScreen />
           ) : tab === "insights" ? (
@@ -266,6 +270,8 @@ function Root() {
                 setFocusSlot(null);
                 setTab("today");
               }}
+              onGoHome={() => setTab("today")}
+              onRequestCatchUp={evaluateCatchUp}
             />
           )}
         </View>

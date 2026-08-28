@@ -81,16 +81,22 @@ type Perms = { overlay: boolean; exact: boolean; fsi: boolean; battery: boolean 
 export default function SettingsScreen({
   onReset,
   onClose,
+  onGoHome,
+  onRequestCatchUp,
 }: {
   onReset: () => void;
   /** Close the Settings modal (App.tsx wires this to the header "Done" button). */
   onClose?: () => void;
+  /** Jump back to the Today tab (after clearing, so the user can re-enter their day). */
+  onGoHome?: () => void;
+  /** Ask App to re-open the (mandatory) catch-up wall — used after clearing so the empty day
+   *  immediately prompts to be re-filled. */
+  onRequestCatchUp?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { settings } = useStore();
   const [scheduled, setScheduled] = useState<number | null>(null);
   const [armed, setArmed] = useState(false);
-  const [armedLogs, setArmedLogs] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [perms, setPerms] = useState<Perms>({ overlay: true, exact: true, fsi: true, battery: true });
   const [engineRunning, setEngineRunning] = useState<boolean | null>(null);
@@ -175,20 +181,26 @@ export default function SettingsScreen({
     return () => clearTimeout(id);
   }, [armed]);
 
-  useEffect(() => {
-    if (!armedLogs) return;
-    const id = setTimeout(() => setArmedLogs(false), 4000);
-    return () => clearTimeout(id);
-  }, [armedLogs]);
-
-  // Clear only the logged entries (every day's data) — keeps your categories, window and setup.
-  const clearLogs = async () => {
-    if (!armedLogs) {
-      setArmedLogs(true);
-      return;
-    }
-    setArmedLogs(false);
-    await clearAllEntries();
+  // Clear only the logged entries (every day's data) — keeps categories/window/setup. Confirm →
+  // clear → send them home and re-open the catch-up so the now-empty day prompts a re-fill.
+  const clearLogs = () => {
+    Alert.alert(
+      "Clear all logged data?",
+      "Every logged block (all days) is deleted. Your categories, window and settings stay.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            await clearAllEntries();
+            onGoHome?.();
+            onRequestCatchUp?.();
+            Alert.alert("Logged data cleared", "Fill in your day on the catch-up screen.");
+          },
+        },
+      ],
+    );
   };
 
   const windowMinutes =
@@ -587,12 +599,7 @@ export default function SettingsScreen({
 
       <FadeIn delay={370}>
         <Text style={[type.label, styles.sectionLabel]}>DANGER ZONE</Text>
-        <Button
-          label={armedLogs ? "Tap again to clear all logs" : "Clear logged data"}
-          variant="ghost"
-          onPress={clearLogs}
-          testID="clear-logs"
-        />
+        <Button label="Clear logged data" variant="ghost" onPress={clearLogs} testID="clear-logs" />
         <Text style={styles.hint}>
           Wipes every logged block (all days) but keeps your categories, window and settings.
         </Text>

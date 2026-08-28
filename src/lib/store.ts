@@ -76,8 +76,8 @@ export const DEFAULT_CATEGORIES: Category[] = [
 const DEFAULT_SETTINGS: Settings = {
   onboarded: false,
   tracking: false,
-  wakeMinutes: 7 * 60,
-  sleepMinutes: 23 * 60,
+  wakeMinutes: 8 * 60,
+  sleepMinutes: 22 * 60,
   intervalMinutes: 15,
   categories: DEFAULT_CATEGORIES,
   pausedUntil: 0,
@@ -247,6 +247,23 @@ export async function logManyEntries(
 export async function clearAllEntries(): Promise<void> {
   setState({ entries: {} });
   await persistEntries({});
+}
+
+/** Clear just TODAY's logged blocks (local calendar day), keeping earlier days intact — the
+ *  home-screen "clear the day so I can re-put it" action. */
+export async function clearDay(now: number = Date.now()): Promise<Entries> {
+  const d = new Date(now);
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const end = start + 24 * 60 * 60 * 1000;
+  const next: Entries = {};
+  for (const [k, v] of Object.entries(state.entries)) {
+    const slot = Number(k);
+    if (slot >= start && slot < end) continue; // drop today's blocks
+    next[k] = v;
+  }
+  setState({ entries: next });
+  await persistEntries(next);
+  return next;
 }
 
 /** Full wipe — entries AND settings back to defaults (leaves onboarding done? no: reset). */
