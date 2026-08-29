@@ -45,6 +45,7 @@ export interface Settings {
   oemSetupConfirmed: boolean; // user confirmed they enabled the OEM (MIUI/Samsung) extra switches
   autostartDone: boolean; // user marked the (unverifiable) Android autostart switch as enabled
   popupDone: boolean; // user marked the (unverifiable) Android background-popup switch as enabled
+  hardcoreMode: boolean; // opt-in: block the phone with the chooser on unlock until answered
   trackingStartedAt: number; // epoch ms tracking began; catch-up ignores blocks before this (0 = unset)
 }
 
@@ -85,6 +86,7 @@ const DEFAULT_SETTINGS: Settings = {
   oemSetupConfirmed: false,
   autostartDone: false,
   popupDone: false,
+  hardcoreMode: false,
   trackingStartedAt: 0,
 };
 

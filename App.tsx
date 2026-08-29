@@ -75,6 +75,8 @@ async function armPings(s: Settings): Promise<void> {
           // Whether the full-screen chooser is allowed over the LOCK SCREEN (optional toggle); when
           // off, a locked-screen ping stays a notification and the chooser waits until the phone's in use.
           lockScreenPopup: s.lockScreenPopup,
+          // Hardcore (opt-in): block the phone with the chooser on unlock until answered.
+          hardcoreMode: s.hardcoreMode,
         });
       } else {
         await TimePing.cancelAll();
@@ -230,6 +232,7 @@ function Root() {
     settings.tracking,
     settings.pausedUntil, // pausing/resuming popups re-arms the schedule
     settings.lockScreenPopup, // toggling lock-screen popup re-arms with the new flag
+    settings.hardcoreMode, // toggling hardcore re-arms so the native flag updates
   ]);
 
   if (!ready) {

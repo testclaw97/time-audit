@@ -47,7 +47,8 @@ object PingScheduler {
         wakeMin: Int,
         sleepMin: Int,
         pausedUntilMs: Long = 0L,
-        lockScreenPopup: Boolean = PingStore.DEFAULT_LOCK_SCREEN_POPUP
+        lockScreenPopup: Boolean = PingStore.DEFAULT_LOCK_SCREEN_POPUP,
+        hardcoreMode: Boolean = false
     ): Int {
         // Clamp the interval so a corrupt value can't zero the step (divide-by-zero) or spin.
         val interval = if (intervalMin in MIN_INTERVAL_MIN..1440f) intervalMin
@@ -59,6 +60,9 @@ object PingScheduler {
         // with no JS process) can gate the lock-screen full-screen intent, and BootReceiver can
         // restore the user's choice after a reboot.
         PingStore.saveParams(ctx, interval, wake, sleep, pausedUntilMs, lockScreenPopup)
+        // Hardcore (opt-in): on unlock, block the phone with the chooser until the current block is
+        // answered. Read by PingService's USER_PRESENT receiver, which may run with no JS process.
+        PingStore.setHardcore(ctx, hardcoreMode)
 
         // Bring up (or keep up) the persistent engine. Guarded inside PingService.send — if an OEM
         // refuses the FGS start here, we still arm the alarm below and the first fire retries the
@@ -204,22 +208,36 @@ object PingScheduler {
             ctx, requestCode,
             buildFireIntent(ctx, slotStart, interval, wake, sleep)
         )
-        // setExactAndAllowWhileIdle punches through Doze so the ping lands ON the boundary, even
-        // with the screen off, AND (being an exact/allow-while-idle alarm) grants the short
-        // temporary allow-list PingReceiver needs to start the foreground service on fire. If the
-        // user hasn't granted SCHEDULE_EXACT_ALARM (Android 12+), degrade to the inexact-but-
-        // still-Doze-tolerant variant — a slightly-late ping beats none. See the setAlarmClock
-        // TODO on the object if even this proves too soft on a given OEM.
+        // setAlarmClock is the STRONGEST Doze guarantee Android gives an app — the OS treats it like
+        // a user alarm clock, so it fires on time even in deep Doze/battery-saving where
+        // setExactAndAllowWhileIdle still gets deferred on aggressive OEMs (the "doesn't always pop
+        // up" bug). Like an exact alarm it also grants the short allow-list PingReceiver needs to
+        // start the FGS on fire. Cost: a persistent alarm icon in the status bar (acceptable). If
+        // exact isn't granted, degrade to the inexact-but-Doze-tolerant variant — late beats never.
         try {
             if (canExact(am)) {
-                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireTime, pi)
+                am.setAlarmClock(AlarmManager.AlarmClockInfo(fireTime, showPI(ctx)), pi)
             } else {
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireTime, pi)
             }
-        } catch (_: SecurityException) {
-            // Some OEMs throw if exact was revoked mid-flight — fall back gracefully.
-            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireTime, pi)
+        } catch (_: Throwable) {
+            // Some OEMs throw if exact was revoked mid-flight, or reject setAlarmClock — fall back.
+            try {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireTime, pi)
+            } catch (_: Throwable) {
+                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, fireTime, pi)
+            }
         }
+    }
+
+    /** The "tap the alarm-clock icon" target for setAlarmClock — just opens the app. */
+    private fun showPI(ctx: Context): PendingIntent? {
+        val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: return null
+        return PendingIntent.getActivity(
+            ctx, PingStore.REQ_SHOW, launch,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
     }
 
     private fun canExact(am: AlarmManager): Boolean =

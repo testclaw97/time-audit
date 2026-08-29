@@ -6,8 +6,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
@@ -56,6 +58,10 @@ class PingService : Service() {
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    // Runtime receiver for SCREEN_ON (watchdog re-arm) + USER_PRESENT (hardcore unlock block). These
+    // implicit broadcasts can ONLY be caught by a runtime-registered receiver (not the manifest),
+    // and only while this persistent service is alive — which is exactly when we want them.
+    private var systemReceiver: BroadcastReceiver? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -64,6 +70,49 @@ class PingService : Service() {
         // Flip the liveness flag the moment the process anchor exists so `isEngineRunning()` can
         // report engine health to the JS layer (see [TimePingModule] + the companion flag).
         isRunning = true
+        registerSystemReceiver()
+    }
+
+    /** Listen for screen-on (re-arm the chain — a cheap watchdog) and unlock (hardcore block). */
+    private fun registerSystemReceiver() {
+        if (systemReceiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                try {
+                    when (intent.action) {
+                        Intent.ACTION_SCREEN_ON -> {
+                            // Watchdog: whenever the screen wakes, make sure an alarm is still armed.
+                            try { PingScheduler.scheduleNext(this@PingService) } catch (_: Throwable) {}
+                        }
+                        Intent.ACTION_USER_PRESENT -> onUserPresent()
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        try {
+            registerReceiver(r, filter)
+            systemReceiver = r
+        } catch (_: Throwable) {
+        }
+    }
+
+    /**
+     * Phone was just unlocked. Always re-arm (watchdog). Then, in HARDCORE mode, block the phone
+     * with the chooser for the current block — but only ONCE per block (claimHardcorePrompt), so
+     * unlocking repeatedly in the same 15 minutes doesn't nag. Snooze is honoured by render().
+     */
+    private fun onUserPresent() {
+        try { PingScheduler.scheduleNext(this) } catch (_: Throwable) {}
+        if (!PingStore.getHardcore(this)) return
+        if (PingStore.getPausedUntil(this) > System.currentTimeMillis()) return
+        val slot = PingStore.currentSlotStart(this)
+        if (!PingStore.claimHardcorePrompt(this, slot)) return
+        render(slot, isTest = false)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -134,6 +183,11 @@ class PingService : Service() {
             teardown()
         } catch (_: Throwable) {
         }
+        try {
+            systemReceiver?.let { unregisterReceiver(it) }
+        } catch (_: Throwable) {
+        }
+        systemReceiver = null
         isRunning = false
         super.onDestroy()
     }

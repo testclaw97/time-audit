@@ -97,6 +97,7 @@ object PingStore {
     const val ALARM_CAP = 60                       // width of the legacy-batch sweep range (upgrade cleanup)
     const val REQ_CHAIN = REQ_ALARM_BASE + ALARM_CAP // 47060 — the single self-rescheduling "next" alarm
     const val REQ_TEST = REQ_CHAIN + 1               // 47061 — one-shot "Test the popup" alarm
+    const val REQ_SHOW = REQ_CHAIN + 2               // 47062 — setAlarmClock "show" intent (opens app)
 
     // --- SharedPreferences plumbing ----------------------------------------------------
     private const val PREFS = "time_ping"
@@ -108,6 +109,8 @@ object PingStore {
     private const val KEY_PAUSED_UNTIL = "paused_until" // epoch-ms; pings before this are suppressed
     private const val KEY_LOCK_SCREEN_POPUP = "lock_screen_popup" // Boolean; gate the FSI over keyguard
     private const val KEY_FOCUS_SLOT = "focus_slot" // epoch-ms of a slot the user tapped "Other" for
+    private const val KEY_HARDCORE = "hardcore_mode" // Boolean; block the phone on unlock until answered
+    private const val KEY_LAST_PROMPTED = "last_prompted_slot" // epoch-ms; throttle hardcore to 1/slot
 
     // Fallback schedule params if something reads before the first schedule() call.
     const val DEFAULT_INTERVAL = 15
@@ -387,6 +390,34 @@ object PingStore {
      */
     fun getLockScreenPopup(ctx: Context): Boolean =
         prefs(ctx).getBoolean(KEY_LOCK_SCREEN_POPUP, DEFAULT_LOCK_SCREEN_POPUP)
+
+    // --- hardcore (opt-in) : block the phone on unlock until the current block is answered --------
+
+    fun setHardcore(ctx: Context, on: Boolean) {
+        synchronized(lock) { prefs(ctx).edit().putBoolean(KEY_HARDCORE, on).apply() }
+    }
+    fun getHardcore(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HARDCORE, false)
+
+    /** Start epoch-ms of the interval block that CONTAINS `now` (floored to the interval step). */
+    fun currentSlotStart(ctx: Context, now: Long = System.currentTimeMillis()): Long {
+        val interval = getInterval(ctx)
+        val safe = if (interval in 0.25f..1440f) interval else DEFAULT_INTERVAL.toFloat()
+        val stepMs = (safe * 60_000f).toLong().coerceAtLeast(1L)
+        return (now / stepMs) * stepMs
+    }
+
+    /**
+     * Claim a slot for a hardcore prompt exactly once. Returns true (and records it) if this slot
+     * hasn't been prompted yet; false if it already has — so unlocking 10× in one block prompts once.
+     */
+    fun claimHardcorePrompt(ctx: Context, slotStart: Long): Boolean {
+        synchronized(lock) {
+            val last = prefs(ctx).getLong(KEY_LAST_PROMPTED, 0L)
+            if (last == slotStart) return false
+            prefs(ctx).edit().putLong(KEY_LAST_PROMPTED, slotStart).apply()
+            return true
+        }
+    }
 
     /** Wipe the stored params (called on cancelAll) so a reboot won't resurrect the pings. */
     fun clearParams(ctx: Context) {

@@ -42,7 +42,9 @@ class TimePingModule : Module() {
                 // LOCKED-screen ping degrades to the floor notification instead of taking over the
                 // keyguard with the full-screen chooser (see PingService.render).
                 val lockScreenPopup = boolOf(opts["lockScreenPopup"], true)
-                PingScheduler.schedule(context, interval, wake, sleep, pausedUntil, lockScreenPopup)
+                // Hardcore (opt-in): block the phone with the chooser on unlock until answered.
+                val hardcore = boolOf(opts["hardcoreMode"], false)
+                PingScheduler.schedule(context, interval, wake, sleep, pausedUntil, lockScreenPopup, hardcore)
             } catch (_: Throwable) {
                 0
             }

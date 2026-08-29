@@ -66,6 +66,9 @@ export interface TimePingModule {
     /** Show the full-screen popup over the LOCK SCREEN (default true). When false, a locked-screen
      *  ping stays the notification floor and the chooser only appears once the phone is in use. */
     lockScreenPopup?: boolean;
+    /** Hardcore (opt-in): on unlock, block the phone with the chooser until the current block is
+     *  answered (once per block). Default false. */
+    hardcoreMode?: boolean;
   }): Promise<number>;
   /** Cancel every scheduled ping alarm (used when tracking is turned off). */
   cancelAll(): Promise<void>;

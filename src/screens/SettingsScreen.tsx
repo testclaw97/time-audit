@@ -330,6 +330,7 @@ export default function SettingsScreen({
   };
   const toggleAutostartDone = () => void updateSettings({ autostartDone: !settings.autostartDone });
   const togglePopupDone = () => void updateSettings({ popupDone: !settings.popupDone });
+  const toggleHardcore = () => void updateSettings({ hardcoreMode: !settings.hardcoreMode });
 
   return (
     <ScrollView
@@ -500,6 +501,19 @@ export default function SettingsScreen({
               </Text>
             </View>
             <Toggle value={settings.lockScreenPopup} onToggle={toggleLockScreen} />
+          </View>
+        </Card>
+
+        <Card tone={settings.hardcoreMode ? "accent" : undefined} style={styles.lockToggleCard}>
+          <View style={styles.rowBetween}>
+            <View style={styles.rowText}>
+              <Text style={[type.bodyStrong, styles.rowTitle]}>🔒 Hardcore mode</Text>
+              <Text style={[type.caption, styles.rowSub]}>
+                Every time you unlock your phone, the check-in takes over the screen until you answer
+                the last block — once per 15 minutes. The most reliable way to never miss one.
+              </Text>
+            </View>
+            <Toggle value={settings.hardcoreMode} onToggle={toggleHardcore} />
           </View>
         </Card>
 
